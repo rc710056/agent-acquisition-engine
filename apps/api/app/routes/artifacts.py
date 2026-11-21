@@ -5,17 +5,24 @@ from sqlalchemy import select
 from typing import List
 
 from apps.api.app.models.database import get_db
-from apps.api.app.models.entities import Artifact
+from apps.api.app.models.entities import Artifact, User
 from packages.shared_schemas.models import ArtifactMetadata
 from apps.api.app.services.storage import storage_service
 from apps.api.app.security.tokens import verify_signed_delivery_token
+from apps.api.app.security.auth import get_authenticated_user_or_agent
 from apps.api.app.config import settings
 
 router = APIRouter(tags=["Artifacts"])
 
 @router.get("/artifacts", response_model=List[ArtifactMetadata])
-async def list_artifacts(db: AsyncSession = Depends(get_db)):
-    stmt = select(Artifact).order_by(Artifact.created_at.desc()).limit(100)
+async def list_artifacts(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
+    stmt = select(Artifact)
+    if user.role != "admin":
+        stmt = stmt.where(Artifact.user_id == user.id)
+    stmt = stmt.order_by(Artifact.created_at.desc()).limit(100)
     res = await db.execute(stmt)
     artifacts = res.scalars().all()
 
@@ -35,9 +42,13 @@ async def list_artifacts(db: AsyncSession = Depends(get_db)):
     return result
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactMetadata)
-async def get_artifact(artifact_id: str, db: AsyncSession = Depends(get_db)):
+async def get_artifact(
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     art = await db.get(Artifact, artifact_id)
-    if not art:
+    if not art or (user.role != "admin" and art.user_id != user.id):
         raise HTTPException(status_code=404, detail="Artifact not found.")
 
     dl_url, exp_time = storage_service.generate_delivery_url(art.id)

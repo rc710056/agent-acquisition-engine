@@ -9,6 +9,7 @@ from datetime import datetime
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import AgentConnection, User
 from apps.api.app.security.tokens import hash_api_key
+from apps.api.app.security.auth import get_authenticated_user_or_agent
 
 router = APIRouter(prefix="/connections", tags=["Agent Connections"])
 
@@ -25,15 +26,11 @@ class ConnectionResponse(BaseModel):
     created_at: datetime
 
 @router.post("", response_model=ConnectionResponse, status_code=status.HTTP_201_CREATED)
-async def create_agent_connection(req: CreateConnectionRequest, db: AsyncSession = Depends(get_db)):
-    stmt_user = select(User).limit(1)
-    res_user = await db.execute(stmt_user)
-    user = res_user.scalar_one_or_none()
-    if not user:
-        user = User(email="operator@antigravity.internal", hashed_password="default_hash", role="admin")
-        db.add(user)
-        await db.flush()
-
+async def create_agent_connection(
+    req: CreateConnectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     raw_api_key = f"aae_live_{secrets.token_urlsafe(32)}"
     hashed_key = hash_api_key(raw_api_key)
 
@@ -57,8 +54,14 @@ async def create_agent_connection(req: CreateConnectionRequest, db: AsyncSession
     )
 
 @router.get("", response_model=List[ConnectionResponse])
-async def list_agent_connections(db: AsyncSession = Depends(get_db)):
-    stmt = select(AgentConnection).order_by(AgentConnection.created_at.desc())
+async def list_agent_connections(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
+    stmt = select(AgentConnection)
+    if user.role != "admin":
+        stmt = stmt.where(AgentConnection.user_id == user.id)
+    stmt = stmt.order_by(AgentConnection.created_at.desc())
     res = await db.execute(stmt)
     conns = res.scalars().all()
     return [
@@ -74,9 +77,15 @@ async def list_agent_connections(db: AsyncSession = Depends(get_db)):
     ]
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_agent_connection(connection_id: str, db: AsyncSession = Depends(get_db)):
+async def revoke_agent_connection(
+    connection_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     conn = await db.get(AgentConnection, connection_id)
-    if not conn:
+    if not conn or (user.role != "admin" and conn.user_id != user.id):
         raise HTTPException(status_code=404, detail="Connection not found.")
+    await db.delete(conn)
+    await db.commit()
     await db.delete(conn)
     await db.commit()

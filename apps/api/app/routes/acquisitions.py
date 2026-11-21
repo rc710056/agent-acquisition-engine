@@ -190,8 +190,14 @@ async def create_job(
     )
 
 @router.get("/jobs", response_model=List[JobStatusResponse])
-async def list_jobs(db: AsyncSession = Depends(get_db)):
-    stmt = select(AcquisitionJob).order_by(AcquisitionJob.created_at.desc()).limit(100)
+async def list_jobs(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
+    stmt = select(AcquisitionJob)
+    if user.role != "admin":
+        stmt = stmt.where(AcquisitionJob.user_id == user.id)
+    stmt = stmt.order_by(AcquisitionJob.created_at.desc()).limit(100)
     res = await db.execute(stmt)
     jobs = res.scalars().all()
     return [
@@ -211,9 +217,13 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
     ]
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     job = await db.get(AcquisitionJob, job_id)
-    if not job:
+    if not job or (user.role != "admin" and job.user_id != user.id):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     return JobStatusResponse(
@@ -230,9 +240,13 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
     )
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def cancel_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     job = await db.get(AcquisitionJob, job_id)
-    if not job:
+    if not job or (user.role != "admin" and job.user_id != user.id):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     if job.state in [JobState.COMPLETED.value, JobState.FAILED.value, JobState.CANCELLED.value]:

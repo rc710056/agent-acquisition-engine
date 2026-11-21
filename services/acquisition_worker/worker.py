@@ -153,6 +153,23 @@ class AcquisitionWorker:
             if cached_art and storage_service.get_artifact_path(cached_art.storage_path).exists():
                 job_record = await session.get(AcquisitionJob, job_id)
                 if job_record:
+                    if cached_art.user_id == user_id:
+                        target_art_id = cached_art.id
+                    else:
+                        user_art = Artifact(
+                            user_id=user_id,
+                            filename=cached_art.filename,
+                            mime_type=cached_art.mime_type,
+                            size_bytes=cached_art.size_bytes,
+                            sha256=cached_art.sha256,
+                            storage_path=cached_art.storage_path,
+                            is_verified=True,
+                            origin_cache_key=cache_key
+                        )
+                        session.add(user_art)
+                        await session.flush()
+                        target_art_id = user_art.id
+
                     validate_state_transition(job_record.state, JobState.VERIFYING)
                     job_record.state = JobState.VERIFYING.value
                     validate_state_transition(job_record.state, JobState.COMPLETED)
@@ -161,12 +178,12 @@ class AcquisitionWorker:
                     job_record.bytes_transferred = cached_art.size_bytes
                     job_record.total_bytes = cached_art.size_bytes
                     job_record.current_operation = "Acquisition fulfilled instantly from deduplication cache"
-                    job_record.artifact_id = cached_art.id
+                    job_record.artifact_id = target_art_id
                     session.add(JobEvent(
                         job_id=job_id,
                         event_type="completed",
                         message=f"Artifact {cached_art.filename} served from deduplication cache.",
-                        payload={"cached": True, "artifact_id": cached_art.id}
+                        payload={"cached": True, "artifact_id": target_art_id}
                     ))
                     await session.commit()
                     return

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import UserApproval, Source, SourceOption, User
+from apps.api.app.security.auth import get_authenticated_user_or_agent
 from packages.shared_schemas.models import (
     ApprovalRequestCreate,
     ApprovalResponse,
@@ -28,8 +29,14 @@ class ApprovalDetailResponse(BaseModel):
     created_at: datetime
 
 @router.get("", response_model=list[ApprovalDetailResponse])
-async def list_approvals(db: AsyncSession = Depends(get_db)):
-    stmt = select(UserApproval).order_by(UserApproval.created_at.desc()).limit(100)
+async def list_approvals(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
+    stmt = select(UserApproval)
+    if user.role != "admin":
+        stmt = stmt.where(UserApproval.user_id == user.id)
+    stmt = stmt.order_by(UserApproval.created_at.desc()).limit(100)
     res = await db.execute(stmt)
     approvals = res.scalars().all()
     return [
@@ -46,17 +53,17 @@ async def list_approvals(db: AsyncSession = Depends(get_db)):
     ]
 
 @router.post("/request", response_model=ApprovalResponse)
-async def request_approval(req: ApprovalRequestCreate, db: AsyncSession = Depends(get_db)):
+async def request_approval(
+    req: ApprovalRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     source = await db.get(Source, req.source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
 
-    stmt_user = select(User).limit(1)
-    res_user = await db.execute(stmt_user)
-    user = res_user.scalar_one_or_none()
-
     approval = UserApproval(
-        user_id=user.id if user else "anonymous",
+        user_id=user.id,
         source_id=req.source_id,
         format_id=req.format_id,
         status=ApprovalStatus.PENDING.value,
@@ -75,9 +82,13 @@ async def request_approval(req: ApprovalRequestCreate, db: AsyncSession = Depend
     )
 
 @router.get("/{approval_id}", response_model=ApprovalResponse)
-async def get_approval(approval_id: str, db: AsyncSession = Depends(get_db)):
+async def get_approval(
+    approval_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     approval = await db.get(UserApproval, approval_id)
-    if not approval:
+    if not approval or (user.role != "admin" and approval.user_id != user.id):
         raise HTTPException(status_code=404, detail="Approval request not found.")
 
     return ApprovalResponse(
@@ -88,9 +99,14 @@ async def get_approval(approval_id: str, db: AsyncSession = Depends(get_db)):
     )
 
 @router.post("/{approval_id}/decision", response_model=ApprovalResponse)
-async def decide_approval(approval_id: str, req: ApprovalDecisionRequest, db: AsyncSession = Depends(get_db)):
+async def decide_approval(
+    approval_id: str,
+    req: ApprovalDecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user_or_agent)
+):
     approval = await db.get(UserApproval, approval_id)
-    if not approval:
+    if not approval or (user.role != "admin" and approval.user_id != user.id):
         raise HTTPException(status_code=404, detail="Approval request not found.")
 
     if approval.status != ApprovalStatus.PENDING.value:
