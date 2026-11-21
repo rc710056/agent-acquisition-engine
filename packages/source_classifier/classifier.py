@@ -45,7 +45,7 @@ DIRECT_FILE_EXTENSIONS = {
     # Video
     "mp4", "mkv", "webm", "avi", "mov", "flv", "m4v",
     # Archives & Packages
-    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar",
+    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "torrent",
     # Binaries & Data
     "exe", "bin", "iso", "dmg", "deb", "rpm", "csv", "json", "parquet", "xml"
 }
@@ -96,6 +96,33 @@ class SourceClassifier:
         custom_client: Optional[httpx.AsyncClient] = None
     ) -> ClassificationResult:
         url = url.strip()
+
+        # Handle BitTorrent magnet URIs directly
+        if url.startswith("magnet:?"):
+            is_safe, ssrf_err = SSRFValidator.validate_url(url)
+            if not is_safe:
+                return ClassificationResult(
+                    original_url=url,
+                    resolved_url=url,
+                    source_type=SourceType.UNSUPPORTED_SOURCE,
+                    provider_id="unsupported",
+                    security_status=SecurityStatus.BLOCKED,
+                    acquisition_permission=AcquisitionPermission.RESTRICTED,
+                    source_access_status=SourceAccessStatus.BLOCKED,
+                    errors=[f"Security Policy Violation: {ssrf_err}"]
+                )
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="torrent",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/x-bittorrent",
+                title="BitTorrent Magnet Link"
+            )
+
         parsed = urlparse(url)
 
         # 1. Syntax & Scheme validation
@@ -120,7 +147,7 @@ class SourceClassifier:
                 security_status=SecurityStatus.BLOCKED,
                 acquisition_permission=AcquisitionPermission.RESTRICTED,
                 source_access_status=SourceAccessStatus.BLOCKED,
-                errors=[f"Unsupported protocol scheme '{parsed.scheme}'. Only HTTP and HTTPS are permitted."]
+                errors=[f"Unsupported protocol scheme '{parsed.scheme}'. Only HTTP, HTTPS, and magnet are permitted."]
             )
 
         # 2. SSRF check on initial target

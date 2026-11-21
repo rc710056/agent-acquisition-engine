@@ -26,7 +26,7 @@ class SSRFValidator:
     Enforces protocol whitelists, domain resolution verification, and private IP blocking.
     """
 
-    ALLOWED_SCHEMES = {"http", "https"}
+    ALLOWED_SCHEMES = {"http", "https", "magnet"}
 
     @classmethod
     def validate_url(cls, url: str) -> Tuple[bool, Optional[str]]:
@@ -42,8 +42,12 @@ class SSRFValidator:
         except Exception as e:
             return False, f"Malformed URL: {str(e)}"
 
-        if parsed.scheme.lower() not in cls.ALLOWED_SCHEMES:
-            return False, f"Unsupported scheme '{parsed.scheme}'. Only http and https are permitted."
+        scheme = parsed.scheme.lower()
+        if scheme == "magnet":
+            return cls.validate_magnet(url)
+
+        if scheme not in cls.ALLOWED_SCHEMES:
+            return False, f"Unsupported scheme '{parsed.scheme}'. Only http, https, and magnet are permitted."
 
         hostname = parsed.hostname
         if not hostname:
@@ -114,5 +118,31 @@ class SSRFValidator:
         for blocked in BLOCKED_NETWORKS:
             if ip in blocked:
                 return False, f"IP belongs to blocked network range {blocked}."
+
+        return True, None
+
+    @classmethod
+    def validate_magnet(cls, url: str) -> Tuple[bool, Optional[str]]:
+        """
+        Validates magnet URI structure and protects against embedded tracker SSRF attacks.
+        """
+        if not url.startswith("magnet:?"):
+            return False, "Invalid magnet URI format. Must start with 'magnet:?'"
+
+        from urllib.parse import parse_qs
+        qs = parse_qs(url[8:])
+        xt_list = qs.get("xt", [])
+        if not xt_list:
+            return False, "Magnet URI missing exact topic 'xt' parameter."
+
+        has_valid_btih = any("urn:btih:" in xt or "urn:btmh:" in xt for xt in xt_list)
+        if not has_valid_btih:
+            return False, "Magnet URI missing valid BitTorrent info hash (urn:btih:)."
+
+        # Validate trackers if present to prevent SSRF via trackers
+        for tr in qs.get("tr", []):
+            is_tr_safe, tr_err = cls.validate_url(tr)
+            if not is_tr_safe:
+                return False, f"Tracker URL '{tr}' violates SSRF policy: {tr_err}"
 
         return True, None

@@ -251,6 +251,17 @@ class PermittedMediaProvider(BaseProviderContract):
             except Exception:
                 pass
 
+        # Fallback inspection to Autonomous Browser Sniffer for JS-rendered dynamic media
+        if not formats:
+            try:
+                from providers.browser_sniffer.provider import BrowserSnifferProvider
+                sniffer = BrowserSnifferProvider()
+                sniffer_insp = await sniffer.inspect(url)
+                if sniffer_insp.is_permitted and sniffer_insp.formats:
+                    return sniffer_insp
+            except Exception:
+                pass
+
         if not formats:
             return SourceInspectionResponse(
                 source_id=f"src_{uuid.uuid4().hex[:12]}",

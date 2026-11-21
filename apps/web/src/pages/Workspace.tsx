@@ -37,8 +37,12 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
         const fmts = await api.listFormats(res.source_id);
         setFormats(fmts);
         if (fmts.length > 0) {
-          setSelectedFormat(fmts[0].format_id);
-          const pf = await api.preflight(res.source_id, fmts[0].format_id);
+          const bestFmt = fmts.find((f) => f.format_id === 'best_video_audio') ||
+                          fmts.find((f) => f.category === 'recommended') ||
+                          fmts.find((f) => f.has_audio !== false && f.file_type === 'video') ||
+                          fmts[0];
+          setSelectedFormat(bestFmt.format_id);
+          const pf = await api.preflight(res.source_id, bestFmt.format_id);
           setPreflightData(pf);
         }
       } else if (res.errors.length > 0) {
@@ -237,7 +241,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
                       className="bg-amoled-input border border-amoled-border text-xs text-gray-100 rounded-md px-3 py-1.5 focus:outline-none focus:border-electric-500 font-mono shadow-inner max-w-xs md:max-w-md truncate"
                     >
                       {recommended.length > 0 && (
-                        <optgroup label="🎯 Video + Audio (Recommended)">
+                        <optgroup label="⭐ Video + Audio (Guaranteed with Sound)">
                           {recommended.map((f) => (
                             <option key={f.format_id} value={f.format_id}>
                               {f.quality_label} ({f.mime_type})
@@ -246,7 +250,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
                         </optgroup>
                       )}
                       {audioOnly.length > 0 && (
-                        <optgroup label="🎧 Audio Only">
+                        <optgroup label="🎧 Audio Only (MP3 / M4A)">
                           {audioOnly.map((f) => (
                             <option key={f.format_id} value={f.format_id}>
                               {f.quality_label} ({f.mime_type})
@@ -255,7 +259,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
                         </optgroup>
                       )}
                       {otherFormats.length > 0 && (
-                        <optgroup label="🎬 Other Formats">
+                        <optgroup label="⚠️ Specialized / Video-Only (No Audio)">
                           {otherFormats.map((f) => (
                             <option key={f.format_id} value={f.format_id}>
                               {f.quality_label} {f.resolution ? `[${f.resolution}]` : ''} ({f.mime_type})

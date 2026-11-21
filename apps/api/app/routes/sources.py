@@ -131,7 +131,7 @@ async def list_formats(source_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(stmt)
     options = res.scalars().all()
 
-    return [
+    converted = [
         FormatOption(
             format_id=opt.format_id,
             file_type=opt.file_type,
@@ -147,3 +147,15 @@ async def list_formats(source_id: str, db: AsyncSession = Depends(get_db)):
         )
         for opt in options
     ]
+
+    # Prioritize: best_video_audio first, then recommended, then audio_only, then others
+    def sort_key(f: FormatOption):
+        if f.format_id == "best_video_audio":
+            return (0, 0)
+        if f.category == "recommended" or (f.has_audio is not False and f.file_type == "video"):
+            return (1, 0)
+        if f.category == "audio_only" or f.file_type == "audio":
+            return (2, 0)
+        return (3, 0)
+
+    return sorted(converted, key=sort_key)

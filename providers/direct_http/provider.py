@@ -19,6 +19,7 @@ from packages.shared_schemas.models import (
 from apps.api.app.security.ssrf import SSRFValidator
 from apps.api.app.security.sanitization import sanitize_filename
 from apps.api.app.services.verification import FileVerifier, VerificationResult
+from providers.direct_http.chunked_downloader import ChunkedDownloader
 
 def infer_file_type_from_mime(mime: str, filename: str = "") -> str:
     m = (mime or "").lower()
@@ -208,7 +209,7 @@ class DirectHTTPProvider(BaseProviderContract):
 
                 capabilities = ["direct_stream"]
                 if "bytes" in resp.headers.get("accept-ranges", "").lower():
-                    capabilities.append("resume")
+                    capabilities.extend(["resume", "chunked_download", "concurrent_ranges"])
 
                 filename = extract_filename_from_headers(resp.headers, final_url)
                 file_type = infer_file_type_from_mime(content_type, filename)
@@ -284,53 +285,43 @@ class DirectHTTPProvider(BaseProviderContract):
             raise ValueError(f"Acquisition blocked by security policy: {error}")
 
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        sha256 = hashlib.sha256()
-        transferred_bytes = 0
-        total_bytes: Optional[int] = None
         extracted_filename = os.path.basename(urlparse(url).path) or "download.bin"
+        mime_type = "application/octet-stream"
+        total_bytes: Optional[int] = None
 
         headers = {"User-Agent": "AgentAcquisitionEngine/1.0"}
 
-        async with httpx.AsyncClient(timeout=float(timeout_seconds), follow_redirects=True) as client:
-            async with client.stream("GET", url, headers=headers) as response:
-                if response.status_code >= 400:
-                    raise RuntimeError(f"HTTP request failed with status {response.status_code}")
-
-                # Check redirected URL
-                final_url = str(response.url)
-                safe_final, final_err = SSRFValidator.validate_url(final_url)
-                if not safe_final:
-                    raise SecurityError(f"Redirected to forbidden address '{final_url}': {final_err}")
-
-                extracted_filename = extract_filename_from_headers(response.headers, final_url)
-                cl = response.headers.get("content-length")
+        # Probe headers for true filename and MIME
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                head_resp = await client.head(url, headers=headers)
+                extracted_filename = extract_filename_from_headers(head_resp.headers, str(head_resp.url))
+                mime_type = head_resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
+                cl = head_resp.headers.get("content-length")
                 if cl and cl.isdigit():
                     total_bytes = int(cl)
-                    if total_bytes > max_size_bytes:
-                        raise ValueError(f"Resource size ({total_bytes} bytes) exceeds maximum limit ({max_size_bytes} bytes)")
+        except Exception:
+            pass
 
-                mime_type = response.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
-
-                with open(destination_path, "wb") as f:
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        if not chunk:
-                            continue
-                        transferred_bytes += len(chunk)
-                        if transferred_bytes > max_size_bytes:
-                            raise ValueError(f"Download aborted: file exceeded maximum limit of {max_size_bytes} bytes")
-
-                        sha256.update(chunk)
-                        f.write(chunk)
-
-                        if progress_callback:
-                            await progress_callback(transferred_bytes, total_bytes)
+        downloader = ChunkedDownloader(concurrency=4)
+        dl_res = await downloader.download(
+            url=url,
+            destination_path=destination_path,
+            total_bytes=total_bytes,
+            headers=headers,
+            progress_callback=progress_callback,
+            timeout_seconds=timeout_seconds,
+            max_size_bytes=max_size_bytes
+        )
 
         return {
             "filename": extracted_filename,
             "mime_type": mime_type,
-            "transferred_bytes": transferred_bytes,
-            "total_bytes": total_bytes or transferred_bytes,
-            "sha256": sha256.hexdigest(),
+            "transferred_bytes": dl_res["bytes_downloaded"],
+            "total_bytes": total_bytes or dl_res["bytes_downloaded"],
+            "sha256": dl_res["sha256"],
+            "is_chunked": dl_res.get("is_chunked", False),
+            "chunks_count": dl_res.get("chunks_count", 1)
         }
 
     def verify(

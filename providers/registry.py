@@ -1,6 +1,8 @@
 from typing import List, Optional
 from urllib.parse import urlparse
 from packages.provider_contracts.base import BaseProviderContract
+from providers.torrent.provider import TorrentProvider
+from providers.browser_sniffer.provider import BrowserSnifferProvider
 from providers.pinterest.provider import PinterestProvider
 from providers.permitted_media.provider import PermittedMediaProvider
 from providers.gallery_dl.provider import GalleryDLProvider
@@ -22,11 +24,13 @@ class ProviderRegistryManager:
 
     def __init__(self):
         self._providers: List[BaseProviderContract] = []
-        # Priority order: Specialized platforms first, then generic media, galleries, cobalt, then direct http
+        # Priority order: Torrents/P2P, Specialized platforms, generic media, galleries, cobalt, then direct http
+        self.register(TorrentProvider())
         self.register(PinterestProvider())
         self.register(PermittedMediaProvider())
         self.register(GalleryDLProvider())
         self.register(CobaltProvider())
+        self.register(BrowserSnifferProvider())
         self.register(DirectHTTPProvider())
 
     def register(self, provider: BaseProviderContract) -> None:

@@ -145,6 +145,14 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
                 ))
         await session.commit()
 
+    recommended_fmt = None
+    if formats:
+        recommended_fmt = next((f for f in formats if f.format_id == "best_video_audio"), None)
+        if not recommended_fmt:
+            recommended_fmt = next((f for f in formats if getattr(f, "category", "") == "recommended"), None)
+        if not recommended_fmt:
+            recommended_fmt = formats[0]
+
     return {
         "source_id": source_id,
         "url": url,
@@ -160,6 +168,8 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
         "estimated_size_bytes": inspection.estimated_size_bytes,
         "inspection_status": inspection.inspection_status,
         "title": inspection.title,
+        "recommended_format_id": recommended_fmt.format_id if recommended_fmt else None,
+        "recommended_format_label": recommended_fmt.quality_label if recommended_fmt else None,
         "assets": [a.model_dump() for a in inspection.assets],
         "formats_count": len(inspection.formats),
         "errors": inspection.errors
@@ -170,7 +180,7 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
 # =====================================================================
 @mcp.tool(
     name="list_formats",
-    description="Discovers available downloadable formats, stream codecs, and resolutions for an inspected source ID."
+    description="Discovers available downloadable formats, stream codecs, and resolutions for an inspected source ID with smart recommendations for AI agents."
 )
 async def list_formats(source_id: str) -> Dict[str, Any]:
     async with async_session_factory() as session:
@@ -198,9 +208,21 @@ async def list_formats(source_id: str) -> Dict[str, Any]:
             for opt in options
         ]
 
+        # Prioritize recommended video+audio formats
+        recommended = [f for f in formats_list if f.get("category") == "recommended" or (f.get("has_audio") is not False and f.get("file_type") == "video")]
+        audio_only = [f for f in formats_list if f.get("category") == "audio_only" or f.get("file_type") == "audio"]
+        other = [f for f in formats_list if f not in recommended and f not in audio_only]
+
+        recommended_id = "best_video_audio" if any(f["format_id"] == "best_video_audio" for f in recommended) else (recommended[0]["format_id"] if recommended else (formats_list[0]["format_id"] if formats_list else None))
+
     return {
         "source_id": source_id,
-        "formats": formats_list
+        "recommended_format_id": recommended_id,
+        "recommended_formats": recommended,
+        "audio_only_formats": audio_only,
+        "raw_or_other_formats": other,
+        "formats": formats_list,
+        "agent_guidance": "For video acquisition, use 'best_video_audio' or a 'best_{h}p_mp4' preset to ensure synchronized video and audio. Use 'best_audio_mp3' or 'best_audio_m4a' for audio. Avoid video-only streams without audio unless mute is explicitly requested."
     }
 
 # =====================================================================
