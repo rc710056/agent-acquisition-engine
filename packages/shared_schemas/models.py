@@ -68,6 +68,11 @@ class MediaAsset(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     mime_type: Optional[str] = None
+    synopsis: Optional[str] = None
+    director: Optional[str] = None
+    cast: Optional[str] = None
+    year: Optional[str] = None
+    ott: Optional[List[Dict[str, Any]]] = None
 
 class FormatOption(BaseModel):
     format_id: str
@@ -102,6 +107,13 @@ class SourceInspectionResponse(BaseModel):
     assets: List[MediaAsset] = []
     formats: List[FormatOption] = []
     errors: List[str] = []
+    ott_channels: Optional[List[Dict[str, Any]]] = None
+    ott: Optional[List[Dict[str, Any]]] = None
+    synopsis: Optional[str] = None
+    director: Optional[str] = None
+    cast: Optional[str] = None
+    year: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 class PreflightRequest(BaseModel):
     source_id: str

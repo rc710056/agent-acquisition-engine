@@ -51,32 +51,34 @@ export const Files: React.FC = () => {
           {artifacts.map((art) => (
             <div
               key={art.artifact_id}
-              className="p-4 rounded-xl border border-amoled-border bg-amoled-card/60 hover:border-amoled-border/80 transition-all space-y-3 shadow-lg"
+              className="p-4 rounded-xl border border-amoled-border bg-amoled-card/60 hover:border-amoled-border/80 transition-all space-y-3 shadow-lg overflow-hidden flex flex-col justify-between"
             >
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <h3 className="text-xs font-semibold text-gray-200 truncate max-w-xs">{art.filename}</h3>
+              <div className="flex items-start justify-between gap-3 min-w-0">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <h3 className="text-xs font-semibold text-gray-200 truncate block" title={art.filename}>{art.filename}</h3>
                   <div className="flex items-center space-x-2 text-[10px] text-gray-500 font-mono">
-                    <span>{(art.size_bytes / 1024 / 1024).toFixed(2)} MB</span>
+                    <span className="font-semibold text-gray-400">{(art.size_bytes / 1024 / 1024).toFixed(2)} MB</span>
                     <span>•</span>
                     <span className="truncate max-w-[140px]">{art.mime_type}</span>
                   </div>
                 </div>
                 {art.is_verified && (
-                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-950/40 text-emerald-400 border border-emerald-800/40">
-                    <ShieldCheck className="w-3 h-3" />
+                  <span className="shrink-0 inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-950/40 text-emerald-400 border border-emerald-800/40">
+                    <ShieldCheck className="w-3 h-3 shrink-0" />
                     <span>VERIFIED</span>
                   </span>
                 )}
               </div>
 
               {/* SHA-256 Digest */}
-              <div className="p-2 rounded bg-amoled-input/80 border border-amoled-border flex items-center justify-between text-[10px] font-mono">
-                <span className="text-gray-500 mr-2 shrink-0">SHA-256:</span>
-                <span className="text-gray-300 truncate max-w-[220px]">{art.sha256}</span>
+              <div className="p-2 rounded bg-amoled-input/80 border border-amoled-border flex items-center justify-between text-[10px] font-mono gap-2 min-w-0">
+                <span className="text-gray-500 shrink-0">SHA-256:</span>
+                <span className="text-gray-300 truncate font-mono text-[10px] flex-1 min-w-0 select-all" title={art.sha256}>
+                  {art.sha256}
+                </span>
                 <button
                   onClick={() => copySha(art.sha256, art.artifact_id)}
-                  className="text-gray-500 hover:text-gray-300 ml-2"
+                  className="text-gray-500 hover:text-gray-300 shrink-0 p-1 rounded hover:bg-amoled-card"
                   title="Copy SHA-256"
                 >
                   {copiedId === art.artifact_id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -84,16 +86,16 @@ export const Files: React.FC = () => {
               </div>
 
               {/* Action Bar */}
-              <div className="pt-2 border-t border-amoled-border flex items-center justify-between">
-                <span className="text-[10px] text-gray-500 font-mono">
+              <div className="pt-2 border-t border-amoled-border flex items-center justify-between gap-2">
+                <span className="text-[10px] text-gray-500 font-mono truncate">
                   Link expires {new Date(art.expires_at).toLocaleTimeString()}
                 </span>
                 <a
                   href={art.download_url}
                   download={art.filename}
-                  className="px-3 py-1.5 rounded bg-electric-600 hover:bg-electric-500 text-xs font-medium text-white flex items-center space-x-1.5 transition-colors shadow-sm"
+                  className="px-3 py-1.5 rounded bg-electric-600 hover:bg-electric-500 text-xs font-medium text-white flex items-center space-x-1.5 transition-colors shadow-sm shrink-0"
                 >
-                  <Download className="w-3.5 h-3.5" />
+                  <Download className="w-3.5 h-3.5 shrink-0" />
                   <span>Download Artifact</span>
                 </a>
               </div>

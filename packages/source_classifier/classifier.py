@@ -128,12 +128,12 @@ class SourceClassifier:
         # 1. Syntax & Scheme validation
         if not parsed.scheme or not parsed.netloc:
             lowered = url.lower().strip()
-            # If explicitly prefixed with movie:/search:, or matches cinematic titles or multi-word natural queries
+            # If explicitly prefixed with movie:/search:, or matches cinematic titles or natural queries
             is_movie_query = (
                 lowered.startswith("movie:") or
                 lowered.startswith("search:") or
-                any(m in lowered for m in ("iron man", "big buck bunny", "interstellar", "elephants dream", "avatar")) or
-                (" " in lowered and not lowered.startswith("http"))
+                any(m in lowered for m in ("talk to me", "iron man", "big buck bunny", "interstellar", "elephants dream", "avatar", "oppenheimer", "inception", "gladiator", "barbie")) or
+                (" " in lowered and not lowered.startswith("http") and not any(ext in lowered for ext in [".com", ".org", ".net", ".io", ".dev", ".html", ".php", ".pdf", ".mp4"]))
             )
             if is_movie_query and not any(lowered.startswith(prefix) for prefix in ("file:", "javascript:", "data:", "ftp:", "ldap:")):
                 clean_title = url.replace("movie:", "").replace("search:", "").strip()
