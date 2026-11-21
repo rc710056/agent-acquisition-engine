@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aae-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aae_user
+      POSTGRES_PASSWORD: aae_password
+      POSTGRES_DB: aae_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aae_user -d aae_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: aae-api
+    restart: unless-stopped
+    command: python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://aae_user:aae_password@db:5432/aae_db
+      - ENVIRONMENT=production
+      - API_PORT=8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - artifact_data:/app/storage/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mcp-server:
+    build: .
+    container_name: aae-mcp-server
+    restart: unless-stopped
+    command: python -m services.mcp_server.server
+    environment:
+      - API_BASE_URL=http://api:8000
+      - MCP_PORT=8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      - api
+
+  worker:
+    build: .
+    container_name: aae-worker
+    restart: unless-stopped
+    command: python -m services.acquisition_worker.worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://aae_user:aae_password@db:5432/aae_db
+    volumes:
+      - artifact_data:/app/storage/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  artifact_data:
