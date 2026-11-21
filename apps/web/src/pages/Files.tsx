@@ -30,23 +30,15 @@ export const Files: React.FC = () => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const isPlayable = (mime: string, filename: string) => {
+  const getPreviewType = (mime: string, filename: string): 'video' | 'audio' | 'image' | 'pdf' | 'text' | null => {
     const m = (mime || '').toLowerCase();
     const f = (filename || '').toLowerCase();
-    return (
-      m.includes('audio') ||
-      m.includes('video') ||
-      f.endsWith('.mp3') ||
-      f.endsWith('.mp4') ||
-      f.endsWith('.m4a') ||
-      f.endsWith('.webm')
-    );
-  };
-
-  const isVideo = (mime: string, filename: string) => {
-    const m = (mime || '').toLowerCase();
-    const f = (filename || '').toLowerCase();
-    return m.includes('video') || f.endsWith('.mp4') || f.endsWith('.webm');
+    if (m.includes('video') || f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')) return 'video';
+    if (m.includes('audio') || f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.wav') || f.endsWith('.ogg') || f.endsWith('.flac')) return 'audio';
+    if (m.startsWith('image/') || f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg') || f.endsWith('.webp') || f.endsWith('.gif') || f.endsWith('.svg')) return 'image';
+    if (m === 'application/pdf' || f.endsWith('.pdf')) return 'pdf';
+    if (m.startsWith('text/') || m === 'application/json' || m === 'application/xml' || f.endsWith('.txt') || f.endsWith('.md') || f.endsWith('.json') || f.endsWith('.csv')) return 'text';
+    return null;
   };
 
   return (
@@ -105,30 +97,70 @@ export const Files: React.FC = () => {
                 </button>
               </div>
 
-              {/* In-Browser Media Preview Stream */}
+              {/* In-Browser Media & Document Preview Stream */}
               {previewingId === art.artifact_id && (
                 <div className="p-2.5 rounded-lg bg-amoled-input border border-electric-500/30 animate-in fade-in duration-200">
-                  {isVideo(art.mime_type, art.filename) ? (
-                    <video
-                      controls
-                      autoPlay
-                      playsInline
-                      className="w-full max-h-48 rounded bg-black object-contain border border-amoled-border"
-                      src={art.download_url}
-                    >
-                      Your browser does not support the video tag.
-                    </video>
-                  ) : (
-                    <div className="flex flex-col space-y-1.5 py-1">
-                      <div className="flex items-center space-x-2 text-[11px] text-electric-400 font-mono">
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>Streaming Audio Preview</span>
-                      </div>
-                      <audio controls autoPlay className="w-full h-8" src={art.download_url}>
-                        Your browser does not support the audio element.
-                      </audio>
-                    </div>
-                  )}
+                  {(() => {
+                    const pType = getPreviewType(art.mime_type, art.filename);
+                    if (pType === 'video') {
+                      return (
+                        <video
+                          controls
+                          autoPlay
+                          playsInline
+                          className="w-full max-h-52 rounded bg-black object-contain border border-amoled-border"
+                          src={art.download_url}
+                        >
+                          Your browser does not support video playback.
+                        </video>
+                      );
+                    }
+                    if (pType === 'audio') {
+                      return (
+                        <div className="flex flex-col space-y-1.5 py-1">
+                          <div className="flex items-center space-x-2 text-[11px] text-electric-400 font-mono">
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>Streaming Audio Preview</span>
+                          </div>
+                          <audio controls autoPlay className="w-full h-8" src={art.download_url}>
+                            Your browser does not support audio playback.
+                          </audio>
+                        </div>
+                      );
+                    }
+                    if (pType === 'image') {
+                      return (
+                        <div className="flex justify-center p-1 bg-black/40 rounded border border-amoled-border">
+                          <img
+                            src={art.download_url}
+                            alt={art.filename}
+                            className="max-h-60 max-w-full object-contain rounded"
+                          />
+                        </div>
+                      );
+                    }
+                    if (pType === 'pdf') {
+                      return (
+                        <iframe
+                          src={art.download_url}
+                          title={art.filename}
+                          className="w-full h-72 rounded bg-white border border-amoled-border shadow-inner"
+                        />
+                      );
+                    }
+                    if (pType === 'text') {
+                      return (
+                        <iframe
+                          src={art.download_url}
+                          title={art.filename}
+                          className="w-full h-48 rounded bg-amoled-input p-2 font-mono text-xs text-gray-200 border border-amoled-border"
+                        />
+                      );
+                    }
+                    return (
+                      <p className="text-[11px] text-gray-400 font-mono">Preview not available for this MIME type.</p>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -138,7 +170,7 @@ export const Files: React.FC = () => {
                   <span className="text-[10px] text-gray-500 font-mono truncate">
                     Expires {new Date(art.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                  {isPlayable(art.mime_type, art.filename) && (
+                  {getPreviewType(art.mime_type, art.filename) && (
                     <button
                       onClick={() => setPreviewingId(previewingId === art.artifact_id ? null : art.artifact_id)}
                       className="px-2 py-1 rounded bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-[10px] text-gray-300 hover:text-white flex items-center space-x-1 transition-colors"

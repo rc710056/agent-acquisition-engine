@@ -69,8 +69,14 @@ app.include_router(agent_connections.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 
 # Mount MCP Server-Sent Events (SSE) remote transport at /mcp
+from mcp.server.transport_security import TransportSecuritySettings
 from services.mcp_server.server import mcp
-app.mount("/mcp", mcp.sse_app())
+app.mount(
+    "/mcp",
+    mcp.sse_app(
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    )
+)
 
 if __name__ == "__main__":
     import uvicorn

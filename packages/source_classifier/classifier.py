@@ -36,8 +36,9 @@ KNOWN_PLATFORM_DOMAINS = {
 }
 
 DIRECT_FILE_EXTENSIONS = {
-    # Documents
+    # Documents & Text
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+    "txt", "md", "markdown", "csv", "tsv", "json", "xml", "yaml", "yml", "log", "rtf",
     # Images
     "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "ico",
     # Audio
@@ -47,7 +48,7 @@ DIRECT_FILE_EXTENSIONS = {
     # Archives & Packages
     "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "torrent",
     # Binaries & Data
-    "exe", "bin", "iso", "dmg", "deb", "rpm", "csv", "json", "parquet", "xml"
+    "exe", "bin", "iso", "dmg", "deb", "rpm", "parquet"
 }
 
 class ClassificationResult:
@@ -321,12 +322,21 @@ class SourceClassifier:
         extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
         has_direct_ext = extension in DIRECT_FILE_EXTENSIONS
 
-        # If it's a binary stream, image, video, audio, document, or archive (not html)
+        # If it's a binary stream, image, video, audio, document, text file, or archive (not html)
+        is_text_doc = (
+            (mime_type.startswith("text/") and mime_type not in {"text/html"}) or
+            mime_type in {
+                "application/json", "application/xml", "text/xml", "application/x-yaml",
+                "text/yaml", "text/csv", "application/csv"
+            } or
+            mime_type.startswith("application/vnd.")
+        )
         if not is_html and (
             mime_type.startswith("image/") or
             mime_type.startswith("video/") or
             mime_type.startswith("audio/") or
-            mime_type in {"application/pdf", "application/zip", "application/octet-stream"} or
+            is_text_doc or
+            mime_type in {"application/pdf", "application/zip", "application/octet-stream", "application/gzip", "application/x-tar"} or
             has_direct_ext
         ):
             source_type = SourceType.DIRECT_FILE
