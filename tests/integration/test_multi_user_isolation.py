@@ -5,6 +5,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
 from apps.api.app.main import app
+from apps.api.app.config import settings
 from apps.api.app.models.database import async_session_factory
 from apps.api.app.models.entities import User, AgentConnection, Source, SourceOption, AcquisitionJob, Artifact, UserApproval
 from apps.api.app.security.tokens import hash_api_key
@@ -50,11 +51,12 @@ async def setup_two_users():
             source_type="DIRECT_FILE",
             provider_id="direct_http",
             content_type="application/pdf",
+            estimated_size_bytes=1024,
             is_permitted=True
         )
         session.add(src1)
         await session.flush()
-        opt1 = SourceOption(source_id=src1.id, format_id="original", mime_type="application/pdf", quality_label="original")
+        opt1 = SourceOption(source_id=src1.id, format_id="original", mime_type="application/pdf", estimated_size_bytes=1024, quality_label="original")
         session.add(opt1)
 
         src2 = Source(
@@ -63,11 +65,12 @@ async def setup_two_users():
             source_type="DIRECT_FILE",
             provider_id="direct_http",
             content_type="application/zip",
+            estimated_size_bytes=1024,
             is_permitted=True
         )
         session.add(src2)
         await session.flush()
-        opt2 = SourceOption(source_id=src2.id, format_id="original", mime_type="application/zip", quality_label="original")
+        opt2 = SourceOption(source_id=src2.id, format_id="original", mime_type="application/zip", estimated_size_bytes=1024, quality_label="original")
         session.add(opt2)
 
         await session.commit()
@@ -155,11 +158,11 @@ async def test_approval_isolation_between_users(setup_two_users):
         bob_appr = await client.get("/api/v1/approvals", headers=bob_headers)
         assert not any(a["approval_id"] == approval_id for a in bob_appr.json())
 
-        # Bob attempts to decide on Alice's approval -> 404
+        # Agent credentials cannot decide approvals, even for another user's request.
         bob_decide = await client.post(f"/api/v1/approvals/{approval_id}/decision", json={
             "decision": "approved"
         }, headers=bob_headers)
-        assert bob_decide.status_code == 404
+        assert bob_decide.status_code == 403
 
 @pytest.mark.asyncio
 async def test_artifact_isolation_and_deduplication(setup_two_users, tmp_path: Path):
@@ -198,3 +201,11 @@ async def test_artifact_isolation_and_deduplication(setup_two_users, tmp_path: P
         # Bob attempts direct fetch of Alice's artifact -> 404
         direct_bob = await client.get(f"/api/v1/artifacts/{art_a_id}", headers=bob_headers)
         assert direct_bob.status_code == 404
+
+@pytest.mark.asyncio
+async def test_production_requests_require_credentials(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/acquisitions/jobs")
+    assert response.status_code == 401

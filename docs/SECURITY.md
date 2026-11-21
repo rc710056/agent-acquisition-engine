@@ -16,7 +16,7 @@ The engine protects against SSRF via:
    - `::1/128` (IPv6 Loopback)
    - `fc00::/7` (IPv6 Unique Local)
    - `fe80::/10` (IPv6 Link-local)
-4. **Redirect Inspection**: HTTP client redirects (`301`, `302`, `307`, `308`) are manually intercepted and each hop re-verified against the SSRF validator to prevent DNS rebinding or redirect-to-metadata attacks.
+4. **Direct HTTP Redirect Inspection**: The direct HTTP provider manually intercepts redirects (`301`, `302`, `303`, `307`, `308`), caps redirect hops, and re-verifies each destination against the SSRF validator. DNS results are not pinned to the socket connection, and other providers have their own network clients; production deployments must enforce outbound network restrictions.
 
 ## 2. Resource Exhaustion & Denial of Service
 - **Maximum File Size**: Strict hard limit of 500 MB (configurable). Streaming stops and the connection terminates immediately if total bytes read exceed this limit.
@@ -40,3 +40,9 @@ Expired or tampered URLs are rejected with HTTP 403 Forbidden.
 3. Magic byte signature validation (ensuring a `.pdf` actually begins with `%PDF-`, PNG with `\x89PNG`, etc.).
 4. SHA-256 hash calculated continuously during streaming.
 5. Downloaded files are never executed.
+
+## 6. User and Agent Credentials
+- Production API requests require authentication; the anonymous development fallback is disabled outside development and test environments.
+- Agent API keys are stored as hashes, scoped to one user, and limited to their assigned `read` and `acquire` permissions. Agent keys cannot approve requests, manage portal credentials, or retrieve a user's portal token.
+- Approval records are bound to their owner, source, and format. The owner must make the approval decision through a portal credential.
+- Production deployments must set a unique `SECRET_KEY` of at least 32 characters. Keep agent keys and portal credentials out of source control, tool arguments, and logs.

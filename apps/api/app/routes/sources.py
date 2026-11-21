@@ -5,7 +5,7 @@ from sqlalchemy import select
 from typing import List
 
 from apps.api.app.models.database import get_db
-from apps.api.app.models.entities import Source, SourceOption
+from apps.api.app.models.entities import Source, SourceOption, User
 from packages.shared_schemas.models import (
     SourceInspectionRequest,
     SourceInspectionResponse,
@@ -16,11 +16,16 @@ from packages.shared_schemas.models import (
     SourceAccessStatus
 )
 from providers.registry import provider_registry
+from apps.api.app.security.auth import require_permission
 
 router = APIRouter(prefix="/sources", tags=["Sources"])
 
 @router.post("/inspect", response_model=SourceInspectionResponse)
-async def inspect_source(req: SourceInspectionRequest, db: AsyncSession = Depends(get_db)):
+async def inspect_source(
+    req: SourceInspectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("read"))
+):
     url = req.url.strip()
 
     provider, classification = await provider_registry.resolve_provider_with_classifier(url)
@@ -122,7 +127,11 @@ async def inspect_source(req: SourceInspectionRequest, db: AsyncSession = Depend
     return inspection
 
 @router.get("/{source_id}/formats", response_model=List[FormatOption])
-async def list_formats(source_id: str, db: AsyncSession = Depends(get_db)):
+async def list_formats(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("read"))
+):
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found.")

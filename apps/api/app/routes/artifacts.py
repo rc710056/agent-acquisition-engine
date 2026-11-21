@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,18 +9,19 @@ from apps.api.app.models.entities import Artifact, User
 from packages.shared_schemas.models import ArtifactMetadata
 from apps.api.app.services.storage import storage_service
 from apps.api.app.security.tokens import verify_signed_delivery_token
-from apps.api.app.security.auth import get_authenticated_user_or_agent
+from apps.api.app.security.auth import require_permission, is_admin_request
 from apps.api.app.config import settings
 
 router = APIRouter(tags=["Artifacts"])
 
 @router.get("/artifacts", response_model=List[ArtifactMetadata])
 async def list_artifacts(
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
-    stmt = select(Artifact)
-    if user.role != "admin":
+    stmt = select(Artifact).where(Artifact.is_verified == True)
+    if not is_admin_request(request, user):
         stmt = stmt.where(Artifact.user_id == user.id)
     stmt = stmt.order_by(Artifact.created_at.desc()).limit(100)
     res = await db.execute(stmt)
@@ -44,11 +45,12 @@ async def list_artifacts(
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactMetadata)
 async def get_artifact(
     artifact_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     art = await db.get(Artifact, artifact_id)
-    if not art or (user.role != "admin" and art.user_id != user.id):
+    if not art or not art.is_verified or (not is_admin_request(request, user) and art.user_id != user.id):
         raise HTTPException(status_code=404, detail="Artifact not found.")
 
     dl_url, exp_time = storage_service.generate_delivery_url(art.id)
@@ -77,7 +79,7 @@ async def download_artifact_delivery(token: str = Query(..., description="Crypto
         )
 
     art = await db.get(Artifact, artifact_id)
-    if not art:
+    if not art or not art.is_verified:
         raise HTTPException(status_code=404, detail="Requested artifact does not exist.")
 
     file_path = storage_service.get_artifact_path(art.storage_path)

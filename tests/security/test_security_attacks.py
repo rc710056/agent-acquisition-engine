@@ -17,7 +17,11 @@ async def test_ssrf_attack_prevention():
     # AWS/GCP cloud metadata attack
     res2 = await inspect_source(url="http://169.254.169.254/latest/meta-data/")
     assert res2["is_permitted"] is False
-    assert any("forbidden" in err.lower() or "ssrf" in err.lower() or "prohibited" in err.lower() for err in res2["errors"])
+    assert any(
+        term in err.lower()
+        for err in res2["errors"]
+        for term in ("forbidden", "ssrf", "prohibited", "blocked network", "non-global")
+    )
 
     # Loopback keyword attack
     res3 = await inspect_source(url="http://localhost:22")

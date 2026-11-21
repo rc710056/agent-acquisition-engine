@@ -1,7 +1,11 @@
 import pytest
 from apps.api.app.models.database import init_db, async_session_factory
 from apps.api.app.models.entities import Source, SourceOption, UserApproval
-from services.mcp_server.server import preflight_acquisition, start_acquisition
+from services.mcp_server.server import (
+    _get_default_user_id,
+    preflight_acquisition,
+    start_acquisition
+)
 
 @pytest.mark.asyncio
 async def test_approval_gate_enforcement():
@@ -44,8 +48,9 @@ async def test_approval_gate_enforcement():
 
     # 3. Create pending approval
     async with async_session_factory() as session:
+        user_id = await _get_default_user_id(session)
         appr = UserApproval(
-            user_id="test_user",
+            user_id=user_id,
             source_id=src_id,
             format_id="original",
             status="pending",
@@ -59,7 +64,7 @@ async def test_approval_gate_enforcement():
     # Attempting start_acquisition with pending approval must fail
     res_pending = await start_acquisition(source_id=src_id, format_id="original", approval_id=appr_id)
     assert "error" in res_pending
-    assert "is not approved" in res_pending["error"].lower()
+    assert "unapproved" in res_pending["error"].lower()
 
     # 4. Mark approval as approved
     async with async_session_factory() as session:

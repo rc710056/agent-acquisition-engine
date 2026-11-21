@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
@@ -22,8 +22,8 @@ from packages.shared_schemas.models import (
     ApprovalStatus
 )
 from services.acquisition_worker.state_machine import validate_state_transition
-
-from apps.api.app.security.auth import get_authenticated_user_or_agent
+from apps.api.app.config import settings
+from apps.api.app.security.auth import require_permission, is_admin_request
 
 router = APIRouter(prefix="/acquisitions", tags=["Acquisitions"])
 
@@ -39,7 +39,11 @@ async def get_or_create_default_user(db: AsyncSession) -> User:
     return u
 
 @router.post("/preflight", response_model=PreflightResponse)
-async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depends(get_db)):
+async def preflight_acquisition(
+    req: PreflightRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("read"))
+):
     source = await db.get(Source, req.source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
@@ -48,16 +52,6 @@ async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depend
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acquisition from this source is forbidden by policy or access controls."
-        )
-
-    if not source.is_permitted:
-        return PreflightResponse(
-            can_acquire=False,
-            requires_approval=False,
-            approval_reason="Acquisition from this source is forbidden by policy.",
-            estimated_size_bytes=source.estimated_size_bytes,
-            storage_available=True,
-            duplicate_artifact_id=None
         )
 
     # Check format
@@ -70,11 +64,23 @@ async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depend
     if not opt:
         raise HTTPException(status_code=404, detail=f"Format '{req.format_id}' not found for source.")
 
+    # Quota check: if format exceeds MAX_FILE_SIZE_BYTES
+    if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
+        return PreflightResponse(
+            can_acquire=False,
+            requires_approval=False,
+            approval_reason=f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes).",
+            estimated_size_bytes=opt.estimated_size_bytes,
+            storage_available=False,
+            duplicate_artifact_id=None
+        )
+
     # High size (> 50 MB) requires approval
-    requires_approval = False
+    requires_approval = opt.estimated_size_bytes is None or opt.estimated_size_bytes > 52_428_800
     approval_reason = None
-    if opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800:
-        requires_approval = True
+    if opt.estimated_size_bytes is None:
+        approval_reason = "File size is unknown. Operator approval required before acquisition."
+    elif requires_approval:
         approval_reason = f"Estimated file size ({opt.estimated_size_bytes} bytes) exceeds 50 MB threshold. Operator approval required."
 
     # Check for existing completed duplicate artifact
@@ -84,6 +90,7 @@ async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depend
         .where(
             AcquisitionJob.source_id == req.source_id,
             AcquisitionJob.format_id == req.format_id,
+            AcquisitionJob.user_id == user.id,
             AcquisitionJob.state == JobState.COMPLETED.value,
             Artifact.is_verified == True
         )
@@ -105,7 +112,7 @@ async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depend
 async def create_job(
     req: CreateJobRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("acquire"))
 ):
     source = await db.get(Source, req.source_id)
     if not source:
@@ -127,10 +134,16 @@ async def create_job(
     if not opt:
         raise HTTPException(status_code=404, detail=f"Format '{req.format_id}' not found for source.")
 
+    # Quota check
+    if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
+        )
+
     needs_approval = (opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800)
     if needs_approval and not req.approval_id:
         if req.auto_approve:
-            # Authenticated operator pre-approved the large acquisition
             now = datetime.now(timezone.utc)
             approval = UserApproval(
                 user_id=user.id,
@@ -148,14 +161,19 @@ async def create_job(
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operator approval is required (estimated size > 50 MB), but approval_id was not provided."
+                detail="Operator approval is required (file size is unknown or exceeds 50 MB), but approval_id was not provided."
             )
 
     # If approval requested/needed, check approval status
     if req.approval_id:
         approval = await db.get(UserApproval, req.approval_id)
-        if not approval:
-            raise HTTPException(status_code=400, detail="Specified approval ID does not exist.")
+        if (
+            not approval
+            or approval.user_id != user.id
+            or approval.source_id != req.source_id
+            or approval.format_id != req.format_id
+        ):
+            raise HTTPException(status_code=403, detail="Approval does not match this user, source, and format.")
         if approval.status != ApprovalStatus.APPROVED.value:
             raise HTTPException(status_code=403, detail=f"Approval request is '{approval.status}', not approved.")
 
@@ -209,11 +227,12 @@ async def create_job(
 
 @router.get("/jobs", response_model=List[JobStatusResponse])
 async def list_jobs(
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     stmt = select(AcquisitionJob)
-    if user.role != "admin":
+    if not is_admin_request(request, user):
         stmt = stmt.where(AcquisitionJob.user_id == user.id)
     stmt = stmt.order_by(AcquisitionJob.created_at.desc()).limit(100)
     res = await db.execute(stmt)
@@ -237,11 +256,12 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job(
     job_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     job = await db.get(AcquisitionJob, job_id)
-    if not job or (user.role != "admin" and job.user_id != user.id):
+    if not job or (not is_admin_request(request, user) and job.user_id != user.id):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     return JobStatusResponse(
@@ -260,11 +280,12 @@ async def get_job(
 @router.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
 async def cancel_job(
     job_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("acquire"))
 ):
     job = await db.get(AcquisitionJob, job_id)
-    if not job or (user.role != "admin" and job.user_id != user.id):
+    if not job or (not is_admin_request(request, user) and job.user_id != user.id):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     if job.state in [JobState.COMPLETED.value, JobState.FAILED.value, JobState.CANCELLED.value]:

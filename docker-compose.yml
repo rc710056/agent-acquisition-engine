@@ -7,10 +7,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: aae_user
-      POSTGRES_PASSWORD: aae_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your deployment environment}
       POSTGRES_DB: aae_db
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,9 +23,13 @@ services:
     restart: unless-stopped
     command: python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000
     environment:
-      - DATABASE_URL=postgresql+asyncpg://aae_user:aae_password@db:5432/aae_db
-      - ENVIRONMENT=production
-      - API_PORT=8000
+      DATABASE_URL: postgresql+asyncpg://aae_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your deployment environment}@db:5432/aae_db
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in your deployment environment}
+      ENVIRONMENT: production
+      API_BASE_URL: ${API_BASE_URL:?Set API_BASE_URL to the externally reachable API URL}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to a JSON array of UI origins}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
     ports:
       - "8000:8000"
     volumes:
@@ -36,26 +38,13 @@ services:
       db:
         condition: service_healthy
 
-  mcp-server:
-    build: .
-    container_name: aae-mcp-server
-    restart: unless-stopped
-    command: python -m services.mcp_server.server
-    environment:
-      - API_BASE_URL=http://api:8000
-      - MCP_PORT=8001
-    ports:
-      - "8001:8001"
-    depends_on:
-      - api
-
   worker:
     build: .
     container_name: aae-worker
     restart: unless-stopped
     command: python -m services.acquisition_worker.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://aae_user:aae_password@db:5432/aae_db
+      DATABASE_URL: postgresql+asyncpg://aae_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your deployment environment}@db:5432/aae_db
     volumes:
       - artifact_data:/app/storage/artifacts
     depends_on:

@@ -49,7 +49,7 @@ export const api = {
   },
 
   async getHealth(): Promise<{ status: string; environment: string }> {
-    const res = await authFetch('/health');
+    const res = await authFetch(`${BASE_URL}/health`);
     return handleResponse(res);
   },
 

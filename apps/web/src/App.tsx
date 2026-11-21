@@ -42,6 +42,14 @@ export const App: React.FC = () => {
       setActiveTab(tabParam);
     }
 
+    if (
+      window.location.pathname.includes('/switch-workspace') ||
+      window.location.pathname.endsWith('/switch-workspace') ||
+      params.get('action') === 'switch-workspace'
+    ) {
+      setShowSwitchModal(true);
+    }
+
     loadUserProfile();
 
     api.getHealth()
@@ -49,17 +57,39 @@ export const App: React.FC = () => {
       .catch(() => setSystemStatus('offline'));
   }, []);
 
+  const cleanupSwitchUrl = () => {
+    if (
+      window.location.pathname.includes('/switch-workspace') ||
+      window.location.search.includes('switch-workspace')
+    ) {
+      window.history.replaceState({}, document.title, window.location.pathname.replace('/switch-workspace', '') || '/');
+    }
+  };
+
   const loadUserProfile = async () => {
     try {
+      // Automatic fallback or portal token generation for new user without localStorage token
+      if (!api.getToken()) {
+        const portalRes = await api.getPortalLink();
+        api.setToken(portalRes.portal_token);
+      }
       const profile = await api.getMe();
       setUserProfile(profile);
+      if (profile.portal_token && !api.getToken()) {
+        api.setToken(profile.portal_token);
+      }
     } catch (err) {
       console.error('Failed to load user profile, requesting fallback portal link:', err);
       // Auto-fallback or clear invalid token
       api.clearToken();
       try {
+        const portalRes = await api.getPortalLink();
+        api.setToken(portalRes.portal_token);
         const fallback = await api.getMe();
         setUserProfile(fallback);
+        if (window.location.search.includes('token=') || window.location.search.includes('user_key=')) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
       } catch (e) {
         console.error('Local fallback failed:', e);
       }
@@ -72,6 +102,7 @@ export const App: React.FC = () => {
       api.setToken(res.portal_token);
       setInputEmail('');
       setShowSwitchModal(false);
+      cleanupSwitchUrl();
       await loadUserProfile();
     } catch (err: any) {
       alert(`Failed to create workspace: ${err.message}`);
@@ -79,11 +110,21 @@ export const App: React.FC = () => {
   };
 
   const handleApplyExistingToken = async () => {
-    if (!inputToken.trim()) return;
-    api.setToken(inputToken.trim());
-    setInputToken('');
-    setShowSwitchModal(false);
-    await loadUserProfile();
+    const trimmed = inputToken.trim();
+    if (!trimmed) return;
+    try {
+      api.setToken(trimmed);
+      const profile = await api.getMe();
+      setUserProfile(profile);
+      setInputToken('');
+      setShowSwitchModal(false);
+      cleanupSwitchUrl();
+    } catch (err: any) {
+      alert(`Invalid token or workspace error: ${err.message}`);
+      if (userProfile?.portal_token) {
+        api.setToken(userProfile.portal_token);
+      }
+    }
   };
 
   const handleCopyPermanentLink = () => {
@@ -140,17 +181,19 @@ export const App: React.FC = () => {
         )}
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto p-8">
+        <main className="flex-1 overflow-y-auto p-8" key={userProfile?.id || 'default'}>
           {activeTab === 'workspace' && (
             <Workspace
-              onJobCreated={() => setActiveTab('jobs')}
+              key={userProfile?.id}
+              onJobCreated={loadUserProfile}
+              onNavigateToJobs={() => setActiveTab('jobs')}
               onNavigateToFiles={() => setActiveTab('files')}
             />
           )}
-          {activeTab === 'jobs' && <Jobs />}
-          {activeTab === 'files' && <Files />}
-          {activeTab === 'approvals' && <Approvals />}
-          {activeTab === 'connections' && <Connections />}
+          {activeTab === 'jobs' && <Jobs key={userProfile?.id} />}
+          {activeTab === 'files' && <Files key={userProfile?.id} />}
+          {activeTab === 'approvals' && <Approvals key={userProfile?.id} />}
+          {activeTab === 'connections' && <Connections key={userProfile?.id} />}
           {activeTab === 'providers' && <Providers />}
           {activeTab === 'how-it-works' && (
             <HowItWorks
@@ -172,7 +215,10 @@ export const App: React.FC = () => {
                 <h3 className="text-base font-semibold text-white">Multi-User Personal Workspaces</h3>
               </div>
               <button
-                onClick={() => setShowSwitchModal(false)}
+                onClick={() => {
+                  setShowSwitchModal(false);
+                  cleanupSwitchUrl();
+                }}
                 className="text-gray-400 hover:text-white p-1 rounded hover:bg-amoled-hover"
               >
                 <X className="w-4 h-4" />

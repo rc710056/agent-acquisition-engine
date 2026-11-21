@@ -1,11 +1,14 @@
 import pytest
 import asyncio
 import uuid
+import httpx
 from pathlib import Path
 
+from apps.api.app.main import app
 from apps.api.app.models.database import init_db, async_session_factory
 from apps.api.app.models.entities import User, Source, SourceOption, AcquisitionJob, Artifact, UserApproval
 from services.mcp_server.server import (
+    _get_default_user_id,
     inspect_source,
     list_formats,
     preflight_acquisition,
@@ -16,6 +19,25 @@ from services.mcp_server.server import (
 )
 from services.acquisition_worker.worker import AcquisitionWorker
 from apps.api.app.services.verification import FileVerifier
+
+
+async def _approve_as_user(approval_id: str) -> None:
+    async with async_session_factory() as session:
+        user_id = await _get_default_user_id(session)
+        user = await session.get(User, user_id)
+        portal_token = user.portal_token
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/api/v1/approvals/{approval_id}/decision",
+            json={"decision": "approved"},
+            headers={"Authorization": f"Bearer {portal_token}"}
+        )
+    assert response.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_agent_journey_youtube_with_audio():
@@ -47,9 +69,22 @@ async def test_agent_journey_youtube_with_audio():
     # 3. Agent checks preflight
     preflight = await preflight_acquisition(source_id=source_id, format_id=best_video_audio["format_id"])
     assert preflight["can_acquire"] is True
+    approval_id = None
+    if preflight["requires_approval"]:
+        approval_res = await request_approval(
+            source_id=source_id,
+            format_id=best_video_audio["format_id"],
+            reason="User approved this media acquisition."
+        )
+        approval_id = approval_res["approval_id"]
+        await _approve_as_user(approval_id)
 
     # 4. Agent starts acquisition
-    job_res = await start_acquisition(source_id=source_id, format_id=best_video_audio["format_id"])
+    job_res = await start_acquisition(
+        source_id=source_id,
+        format_id=best_video_audio["format_id"],
+        approval_id=approval_id
+    )
     job_id = job_res["job_id"]
     assert job_res["state"] in {"queued", "completed"}
 
@@ -93,8 +128,21 @@ async def test_agent_journey_audio_only_request():
 
     preflight = await preflight_acquisition(source_id=source_id, format_id=audio_fmt["format_id"])
     assert preflight["can_acquire"] is True
+    approval_id = None
+    if preflight["requires_approval"]:
+        approval_res = await request_approval(
+            source_id=source_id,
+            format_id=audio_fmt["format_id"],
+            reason="User approved this audio acquisition."
+        )
+        approval_id = approval_res["approval_id"]
+        await _approve_as_user(approval_id)
 
-    job_res = await start_acquisition(source_id=source_id, format_id=audio_fmt["format_id"])
+    job_res = await start_acquisition(
+        source_id=source_id,
+        format_id=audio_fmt["format_id"],
+        approval_id=approval_id
+    )
     job_id = job_res["job_id"]
     assert job_res["state"] in {"queued", "completed"}
 

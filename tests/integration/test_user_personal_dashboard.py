@@ -87,7 +87,12 @@ async def test_portal_token_multi_user_isolation():
 @pytest.mark.asyncio
 async def test_mcp_get_user_dashboard_link_tool():
     test_email = f"agent_user_{secrets.token_hex(4)}@antigravity.internal"
-    result = await get_user_dashboard_link(email=test_email)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        portal = await client.post("/api/v1/users/portal-link", json={"email": test_email})
+    result = await get_user_dashboard_link(
+        email=test_email,
+        token=portal.json()["portal_token"]
+    )
 
     assert "dashboard_url" in result
     assert "how_it_works_url" in result

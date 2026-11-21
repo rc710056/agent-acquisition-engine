@@ -16,11 +16,12 @@ import { api } from '../services/api';
 import { SourceInspection, FormatOption, AcquisitionJob } from '../types';
 
 interface WorkspaceProps {
-  onJobCreated: () => void;
+  onJobCreated?: () => void;
+  onNavigateToJobs?: () => void;
   onNavigateToFiles?: () => void;
 }
 
-export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateToFiles }) => {
+export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateToJobs, onNavigateToFiles }) => {
   const [url, setUrl] = useState('');
   const [inspecting, setInspecting] = useState(false);
   const [inspection, setInspection] = useState<SourceInspection | null>(null);
@@ -104,7 +105,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
       const autoApprove = !!preflightData?.requires_approval;
       const job = await api.createJob(inspection.source_id, selectedFormat, undefined, autoApprove);
       setActiveJob(job);
-      onJobCreated();
+      if (onJobCreated) {
+        onJobCreated();
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to start acquisition');
     } finally {
@@ -255,33 +258,39 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
                 You can watch this title legally on official OTT platforms or proceed with offline acquisition below:
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                <a
-                  href="https://www.disneyplus.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-2.5 rounded-lg bg-amoled-input border border-amoled-border hover:border-electric-500/50 flex items-center justify-between text-xs text-gray-200 transition-all group"
-                >
-                  <span className="font-medium">Disney+ (4K HDR)</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-electric-400" />
-                </a>
-                <a
-                  href="https://www.amazon.com/gp/video"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-2.5 rounded-lg bg-amoled-input border border-amoled-border hover:border-electric-500/50 flex items-center justify-between text-xs text-gray-200 transition-all group"
-                >
-                  <span className="font-medium">Prime Video (Rent/Buy)</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-electric-400" />
-                </a>
-                <a
-                  href="https://tv.apple.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-2.5 rounded-lg bg-amoled-input border border-amoled-border hover:border-electric-500/50 flex items-center justify-between text-xs text-gray-200 transition-all group"
-                >
-                  <span className="font-medium">Apple TV (Dolby Atmos)</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-electric-400" />
-                </a>
+                {(() => {
+                  const titleLower = (inspection.title || '').toLowerCase();
+                  const ottList = titleLower.includes('bunny')
+                    ? [
+                        { name: 'Blender Studio (Free Stream)', url: 'https://studio.blender.org' },
+                        { name: 'YouTube (Free 4K 60fps)', url: 'https://www.youtube.com' },
+                        { name: 'Internet Archive (Public Domain)', url: 'https://archive.org' }
+                      ]
+                    : titleLower.includes('interstellar')
+                    ? [
+                        { name: 'Paramount+ (4K HDR)', url: 'https://www.paramountplus.com' },
+                        { name: 'Prime Video (Rent / Buy)', url: 'https://www.amazon.com/gp/video' },
+                        { name: 'Apple TV (Dolby Atmos)', url: 'https://tv.apple.com' }
+                      ]
+                    : [
+                        { name: 'Disney+ (4K HDR)', url: 'https://www.disneyplus.com' },
+                        { name: 'Prime Video (Rent / Buy)', url: 'https://www.amazon.com/gp/video' },
+                        { name: 'Apple TV (Dolby Atmos)', url: 'https://tv.apple.com' }
+                      ];
+
+                  return ottList.map((ott, i) => (
+                    <a
+                      key={i}
+                      href={ott.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-2.5 rounded-lg bg-amoled-input border border-amoled-border hover:border-electric-500/50 flex items-center justify-between text-xs text-gray-200 transition-all group"
+                    >
+                      <span className="font-medium">{ott.name}</span>
+                      <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-electric-400" />
+                    </a>
+                  ));
+                })()}
               </div>
             </div>
           )}
@@ -419,20 +428,49 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
 
       {/* Active Job Progress View */}
       {activeJob && (
-        <div className="p-5 rounded-2xl border border-electric-500/40 bg-gradient-to-br from-electric-950/30 to-amoled-card space-y-3 text-xs shadow-xl backdrop-blur-md">
+        <div className={`p-5 rounded-2xl border space-y-3 text-xs shadow-xl backdrop-blur-md ${
+          activeJob.state === 'failed'
+            ? 'border-red-500/40 bg-gradient-to-br from-red-950/30 to-amoled-card'
+            : activeJob.state === 'completed'
+            ? 'border-emerald-500/40 bg-gradient-to-br from-emerald-950/30 to-amoled-card'
+            : 'border-electric-500/40 bg-gradient-to-br from-electric-950/30 to-amoled-card'
+        }`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2.5">
-              <span className={`w-2.5 h-2.5 rounded-full ${activeJob.state === 'completed' ? 'bg-emerald-400' : 'bg-electric-400 animate-pulse'}`} />
+              <span className={`w-2.5 h-2.5 rounded-full ${
+                activeJob.state === 'completed'
+                  ? 'bg-emerald-400'
+                  : activeJob.state === 'failed'
+                  ? 'bg-red-400'
+                  : 'bg-electric-400 animate-pulse'
+              }`} />
               <span className="font-semibold text-white">
                 Job {activeJob.job_id.slice(0, 12)}: {activeJob.state.toUpperCase()}
               </span>
             </div>
-            <span className="font-mono text-electric-300 font-bold">{activeJob.progress_percent.toFixed(0)}%</span>
+            <div className="flex items-center space-x-3">
+              <span className="font-mono text-electric-300 font-bold">{activeJob.progress_percent.toFixed(0)}%</span>
+              {onNavigateToJobs && (
+                <button
+                  type="button"
+                  onClick={onNavigateToJobs}
+                  className="text-[10px] font-mono text-electric-400 hover:text-electric-300 underline"
+                >
+                  View in Jobs &rarr;
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="w-full h-2 bg-amoled-input rounded-full overflow-hidden border border-amoled-border">
             <div
-              className={`h-full transition-all duration-300 ${activeJob.state === 'completed' ? 'bg-emerald-400' : 'bg-gradient-to-r from-electric-600 to-electric-400'}`}
+              className={`h-full transition-all duration-300 ${
+                activeJob.state === 'completed'
+                  ? 'bg-emerald-400'
+                  : activeJob.state === 'failed'
+                  ? 'bg-red-500'
+                  : 'bg-gradient-to-r from-electric-600 to-electric-400'
+              }`}
               style={{ width: `${Math.min(activeJob.progress_percent, 100)}%` }}
             />
           </div>
@@ -441,6 +479,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
             <span>{activeJob.current_operation}</span>
             <span>{(activeJob.bytes_transferred / 1024 / 1024).toFixed(2)} MB transferred</span>
           </div>
+
+          {activeJob.state === 'failed' && activeJob.error_message && (
+            <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/40 text-red-300 text-xs">
+              <span className="font-medium">Error: </span>{activeJob.error_message}
+            </div>
+          )}
 
           {activeJob.state === 'completed' && onNavigateToFiles && (
             <div className="pt-2 flex justify-end">

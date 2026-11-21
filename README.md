@@ -12,22 +12,20 @@ AI agents no longer need to write custom web scrapers or brittle downloaders. Th
 
 ---
 
-## 🌐 Instant Cloud Access (No Localhost Required)
+## 🌐 Hosted UI and API
 
-You do **not** need to run this locally on `localhost`. You can run and view the entire full-stack application directly from GitHub:
+The GitHub Pages site is a static UI preview; acquisition requires a separately deployed API, worker, database, and storage service. Codespaces is a development environment, not a production hosting or security boundary.
 
-1. **One-Click GitHub Codespaces**: Click the **[Open in GitHub Codespaces](https://codespaces.new/rc710056/agent-acquisition-engine)** button above. GitHub provisions a complete cloud environment with Python 3.12, Node.js 20, `aria2c`, and `ffmpeg` pre-installed, and forwards port `5173` to a secure public HTTPS preview URL.
-2. **Static Web UI Preview**: Hosted on [GitHub Pages](https://rc710056.github.io/agent-acquisition-engine/).
+- **Development:** Open the repository in [GitHub Codespaces](https://codespaces.new/rc710056/agent-acquisition-engine).
+- **Static UI preview:** [GitHub Pages](https://rc710056.github.io/agent-acquisition-engine/).
 
 ---
 
-## ⚡ Real Media Downloads & Architecture
+## 📦 Acquisition scope
 
-Unlike mock or stub downloaders, AAE acquires **genuine, full-sized, verified media files**:
-- **High-Definition Video**: Full-length 1080p/720p synchronized audio-video `.mp4` files (multi-megabyte to gigabyte master streams).
-- **Pure Audio Extraction**: Studio-quality 320kbps `.mp3` and `.m4a` audio files.
-- **P2P BitTorrent Protocol**: Powered by an embedded `aria2c` engine with Async DNS, DHT discovery, and multi-tracker support.
-- **Multi-Step Movie Download Bypasser**: Resolves complex ad-shortened countdown redirect funnels (like MovieMod, VegaMovies, FastCloud, HubCloud) via headless browser network stream sniffing.
+AAE is a provider-based acquisition service, not a universal downloader. Supported sources, file types, and output formats depend on the enabled provider and its upstream rules. The direct HTTP provider handles direct file URLs; platform media and specialized providers have separate support and limitations. A successful inspection is not proof that a source is licensed for reuse.
+
+The service does not bypass DRM, paywalls, CAPTCHAs, or source authentication. Users should only acquire content they are authorized to access and store.
 
 ---
 
@@ -56,11 +54,12 @@ PYTHON WORKER (services/acquisition-worker)
 
 ## 🚀 Key Capabilities (Phase 1 MVP)
 
-- **One Consistent MCP Interface**: 7 core tools (`inspect_source`, `list_formats`, `preflight_acquisition`, `request_approval`, `start_acquisition`, `get_job_status`, `get_artifact`).
+- **One Consistent MCP Interface**: 8 tools for inspection, format selection, approval, acquisition, job status, and artifact delivery.
 - **Direct HTTP/S Provider**: Robust chunked streaming, redirect handling, timeout bounds, and resume support.
-- **SSRF & Security Isolation**: Blocks loopback, link-local, RFC-1918 private IPv4/IPv6 networks, and unsafe redirects.
+- **SSRF & Security Isolation**: Direct HTTP transfers block non-global targets and validate each redirect hop. Production deployments must also restrict network egress, especially for third-party providers.
 - **Strict Verification Pipeline**: Non-zero check, content-length validation, magic byte verification, and SHA-256 calculation before marking jobs `completed`.
-- **Human-in-the-Loop Approval Gate**: Enforces safety approvals when file sizes exceed thresholds or sensitive sources are targeted.
+- **Human-in-the-Loop Approval Gate**: New acquisitions require user approval for files larger than 50 MB or with unknown size. Reusing an already-verified artifact in the same user's vault does not trigger a new approval. The configured maximum is 500 MB by default.
+- **Scoped Agent Credentials**: Agent keys can inspect and acquire only within their granted permissions; they cannot approve jobs or retrieve user portal tokens.
 - **Private Artifact Delivery**: Artifacts are kept strictly private; delivery occurs exclusively via expiring signed URLs.
 - **Persistent State Machine**: 14 distinct states (`created`, `understanding`, `discovering`, `inspecting`, `needs_clarification`, `awaiting_approval`, `queued`, `downloading`, `verifying`, `completed`, `partially_completed`, `failed`, `cancelled`, `expired`).
 
@@ -113,6 +112,10 @@ python -m uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```bash
 python -m services.mcp_server.server
 ```
+
+For local stdio access, configure `MCP_AUTH_TOKEN` in the MCP client's process environment with an agent API key. Do not put credentials in tool arguments or commit them to the repository. This command uses the local database and storage configured for this checkout; it does not connect to a separately hosted deployment.
+
+For remote clients, use the authenticated SSE endpoint mounted by the API at `/mcp/sse` and send the agent API key in the `Authorization: Bearer ...` header.
 
 ### 5. Run Acquisition Worker
 ```bash

@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import model_validator
 from typing import List
 
 class Settings(BaseSettings):
@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
-    SECRET_KEY: str = "aae-super-secret-dev-key-change-in-prod-1234567890"
+    SECRET_KEY: str = "aae-development-only-secret-key"
 
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8000
@@ -32,5 +32,19 @@ class Settings(BaseSettings):
     WORKER_POLL_INTERVAL_SECONDS: float = 0.5
     MAX_RETRIES_PER_JOB: int = 3
     RETRY_BACKOFF_FACTOR: float = 2.0
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self):
+        if self.ENVIRONMENT.lower() not in {"development", "dev", "test"}:
+            secret = self.SECRET_KEY.strip()
+            lowered = secret.lower()
+            placeholders = ("development-only", "change-me", "changeme", "your-secret", "replace-me", "example")
+            if (
+                len(secret) < 32
+                or len(set(secret)) < 8
+                or any(marker in lowered for marker in placeholders)
+            ):
+                raise ValueError("SECRET_KEY must be a unique value of at least 32 characters outside development.")
+        return self
 
 settings = Settings()

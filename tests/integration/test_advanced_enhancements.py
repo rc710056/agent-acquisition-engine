@@ -13,6 +13,7 @@ import httpx
 from apps.api.app.models.database import init_db, async_session_factory
 from apps.api.app.models.entities import User, Source, SourceOption, AcquisitionJob, Artifact
 from services.mcp_server.server import (
+    _get_default_user_id,
     inspect_source,
     list_formats,
     preflight_acquisition,
@@ -79,9 +80,7 @@ async def test_feature_1_deduplication_cache_instant_fulfillment():
     key_hash = hashlib.sha256(cache_key.encode()).hexdigest()
 
     async with async_session_factory() as session:
-        user = User(email=f"cache_user_{uuid.uuid4().hex[:6]}@example.com", hashed_password="pw")
-        session.add(user)
-        await session.flush()
+        user_id = await _get_default_user_id(session)
 
         source = Source(
             url=unique_url,
@@ -104,7 +103,7 @@ async def test_feature_1_deduplication_cache_instant_fulfillment():
         session.add(opt)
 
         artifact = Artifact(
-            user_id=user.id,
+            user_id=user_id,
             filename=clean_name,
             mime_type="application/pdf",
             size_bytes=size,

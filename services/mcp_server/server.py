@@ -1,8 +1,13 @@
 import asyncio
 import logging
 import hashlib
+import os
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import MCPServer, Context
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.middleware.auth_context import get_access_token
 from sqlalchemy import select
 
 from apps.api.app.config import settings
@@ -14,8 +19,10 @@ from apps.api.app.models.entities import (
     JobEvent,
     UserApproval,
     Artifact,
-    User
+    User,
+    AgentConnection
 )
+from apps.api.app.security.tokens import hash_api_key
 from packages.shared_schemas.models import (
     JobState,
     ApprovalStatus,
@@ -29,11 +36,74 @@ from apps.api.app.services.storage import storage_service
 
 logger = logging.getLogger("aae.mcp_server")
 
+class _DatabaseTokenVerifier:
+    async def verify_token(self, token: str) -> Optional[AccessToken]:
+        async with async_session_factory() as session:
+            if token.startswith("aae_live_"):
+                stmt = select(AgentConnection).where(
+                    AgentConnection.api_key_hash == hash_api_key(token)
+                )
+                result = await session.execute(stmt)
+                connection = result.scalar_one_or_none()
+                if not connection:
+                    return None
+                user = await session.get(User, connection.user_id)
+                if not user:
+                    return None
+                connection.last_active_at = datetime.now(timezone.utc)
+                await session.commit()
+                return AccessToken(
+                    token=token,
+                    client_id=connection.id,
+                    subject=user.id,
+                    scopes=[
+                        permission
+                        for permission in (connection.permissions or [])
+                        if permission in {"read", "acquire"}
+                    ],
+                    claims={"credential_type": "agent", "role": user.role}
+                )
+
+            if token.startswith("aae_usr_"):
+                stmt = select(User).where(User.portal_token == token)
+                result = await session.execute(stmt)
+                user = result.scalar_one_or_none()
+                if not user:
+                    return None
+                return AccessToken(
+                    token=token,
+                    client_id=f"user:{user.id}",
+                    subject=user.id,
+                    scopes=["read", "acquire", "approve"],
+                    claims={"credential_type": "portal", "role": user.role}
+                )
+
+        return None
+
+def _is_admin_credential(
+    user: User,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> bool:
+    access_token = get_access_token()
+    if access_token:
+        credential_type = (access_token.claims or {}).get("credential_type")
+        return user.role == "admin" and credential_type == "portal"
+    if api_key or (not token and os.environ.get("MCP_AUTH_TOKEN", "").startswith("aae_live_")):
+        return False
+    return user.role == "admin"
+
 # Initialize MCP Server
 mcp = MCPServer(
     name="Agent Acquisition Engine",
     version="0.1.0",
-    description="MCP-First file, document, and media acquisition infrastructure for autonomous AI agents."
+    description="MCP-First file, document, and media acquisition infrastructure for autonomous AI agents.",
+    auth=AuthSettings(
+        issuer_url=settings.API_BASE_URL,
+        resource_server_url=None,
+        required_scopes=["read"]
+    ),
+    token_verifier=_DatabaseTokenVerifier()
 )
 
 async def _get_default_user_id(session) -> str:
@@ -55,15 +125,101 @@ async def _get_default_user_id(session) -> str:
         await session.flush()
     return user.id
 
+async def _resolve_user_from_credentials(
+    session,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None,
+    required_permission: str = "read"
+) -> tuple[Optional[User], Optional[str]]:
+    """
+    Resolves and authenticates the user for an MCP tool request.
+    Supports MCP bearer auth, local stdio credentials, and development-only fallback.
+    """
+    access_token = get_access_token()
+    if access_token:
+        supplied = api_key or token
+        if supplied:
+            supplied = supplied.removeprefix("Bearer ").strip()
+            if supplied != access_token.token:
+                return None, "Tool credentials do not match the authenticated MCP connection."
+        if required_permission not in access_token.scopes:
+            return None, f"The authenticated credential does not have the '{required_permission}' permission."
+        if not access_token.subject:
+            return None, "Authenticated MCP credential has no user identity."
+        user = await session.get(User, access_token.subject)
+        if not user:
+            return None, "User account associated with MCP credential not found."
+        return user, None
+
+    if not api_key and not token:
+        token = os.environ.get("MCP_AUTH_TOKEN")
+        if token and token.startswith("aae_live_"):
+            api_key, token = token, None
+
+    if api_key:
+        api_key = api_key.strip()
+        if api_key.startswith("Bearer "):
+            api_key = api_key[7:].strip()
+        if not api_key.startswith("aae_live_"):
+            return None, "Invalid agent API key format. Expected 'aae_live_...' prefix."
+        hashed = hash_api_key(api_key)
+        stmt = select(AgentConnection).where(AgentConnection.api_key_hash == hashed)
+        res = await session.execute(stmt)
+        conn = res.scalar_one_or_none()
+        if not conn:
+            return None, "Invalid or revoked agent API key."
+        user = await session.get(User, conn.user_id)
+        if not user:
+            return None, "User account associated with API key not found."
+        if required_permission not in (conn.permissions or []):
+            return None, f"The agent API key does not have the '{required_permission}' permission."
+        return user, None
+
+    if token:
+        token = token.strip()
+        if token.startswith("Bearer "):
+            token = token[7:].strip()
+        if not token.startswith("aae_usr_"):
+            return None, "Invalid user token format. Expected 'aae_usr_...' prefix."
+        stmt = select(User).where(User.portal_token == token)
+        res = await session.execute(stmt)
+        user = res.scalar_one_or_none()
+        if not user:
+            return None, "Invalid or expired personal dashboard token."
+        if required_permission not in {"read", "acquire", "approve"}:
+            return None, f"The user portal credential does not have the '{required_permission}' permission."
+        return user, None
+
+    if settings.ENVIRONMENT.lower() in {"development", "dev", "test"}:
+        user_id = await _get_default_user_id(session)
+        user = await session.get(User, user_id)
+        return user, None
+    return None, "Authentication is required. Configure a bearer token for the MCP server."
+
 # =====================================================================
 # MCP TOOL 1: inspect_source
 # =====================================================================
-@mcp.tool(
-    name="inspect_source",
-    description="Inspects a URL or document source, checks SSRF safety and permissions, and returns metadata without downloading."
-)
-async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def inspect_source(
+    url: str,
+    user_preferences: Optional[Dict[str, Any]] = None,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     url = url.strip()
+    async with async_session_factory() as session:
+        _, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {
+                "source_id": f"src_auth_err_{url[:8]}",
+                "url": url,
+                "is_permitted": False,
+                "security_status": "blocked",
+                "inspection_status": "failed",
+                "errors": [auth_err]
+            }
+
     provider, classification = await provider_registry.resolve_provider_with_classifier(url)
 
     if not provider:
@@ -133,6 +289,7 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
             await session.flush()
             source_id = new_source.id
 
+        formats = []
         if inspection.is_permitted:
             formats = inspection.formats or await provider.list_formats(url)
             from sqlalchemy import delete
@@ -180,19 +337,25 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
         "recommended_format_id": recommended_fmt.format_id if recommended_fmt else None,
         "recommended_format_label": recommended_fmt.quality_label if recommended_fmt else None,
         "assets": [a.model_dump() for a in inspection.assets],
-        "formats_count": len(inspection.formats),
+        "formats_count": len(formats),
         "errors": inspection.errors
     }
 
 # =====================================================================
 # MCP TOOL 2: list_formats
 # =====================================================================
-@mcp.tool(
-    name="list_formats",
-    description="Discovers available downloadable formats, stream codecs, and resolutions for an inspected source ID with smart recommendations for AI agents."
-)
-async def list_formats(source_id: str) -> Dict[str, Any]:
+async def list_formats(
+    source_id: str,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        _, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
         source = await session.get(Source, source_id)
         if not source:
             return {"error": f"Source ID '{source_id}' not found. Run inspect_source first."}
@@ -237,12 +400,20 @@ async def list_formats(source_id: str) -> Dict[str, Any]:
 # =====================================================================
 # MCP TOOL 3: preflight_acquisition
 # =====================================================================
-@mcp.tool(
-    name="preflight_acquisition",
-    description="Checks safety, storage limits, and human approval requirements before starting acquisition."
-)
-async def preflight_acquisition(source_id: str, format_id: str, execution_mode: str = "cloud") -> Dict[str, Any]:
+async def preflight_acquisition(
+    source_id: str,
+    format_id: str,
+    execution_mode: str = "cloud",
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {"can_acquire": False, "error": auth_err}
+
         source = await session.get(Source, source_id)
         if not source:
             return {"can_acquire": False, "error": f"Source ID '{source_id}' not found."}
@@ -263,9 +434,17 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
         if not opt:
             return {"can_acquire": False, "error": f"Format ID '{format_id}' not available for source."}
 
-        requires_approval = False
+        if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
+            return {
+                "can_acquire": False,
+                "error": f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
+            }
+
+        requires_approval = opt.estimated_size_bytes is None or opt.estimated_size_bytes > 52_428_800
         approval_reason = None
-        if opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800:
+        if opt.estimated_size_bytes is None:
+            approval_reason = "File size is unknown. Operator approval is required before acquisition."
+        elif requires_approval:
             requires_approval = True
             approval_reason = f"File size ({opt.estimated_size_bytes} bytes) exceeds 50 MB threshold. Operator approval required."
 
@@ -275,6 +454,7 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
             select(Artifact)
             .where(
                 Artifact.origin_cache_key == cache_key,
+                Artifact.user_id == user.id,
                 Artifact.is_verified == True
             )
             .order_by(Artifact.created_at.desc())
@@ -282,12 +462,16 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
         )
         dup_res = await session.execute(stmt_dup)
         duplicate_art = dup_res.scalar_one_or_none()
-        is_cached = bool(duplicate_art and storage_service.get_artifact_path(duplicate_art.storage_path).exists())
+        artifact_path = storage_service.get_artifact_path(duplicate_art.storage_path) if duplicate_art else None
+        is_cached = artifact_path is not None
+        if is_cached:
+            requires_approval = False
+            approval_reason = None
 
     return {
         "can_acquire": True,
-        "requires_approval": requires_approval if not is_cached else False,
-        "approval_reason": approval_reason if not is_cached else None,
+        "requires_approval": requires_approval,
+        "approval_reason": approval_reason,
         "estimated_size_bytes": opt.estimated_size_bytes,
         "storage_available": True,
         "is_cached": is_cached,
@@ -298,26 +482,42 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
 # =====================================================================
 # MCP TOOL 4: request_approval
 # =====================================================================
-@mcp.tool(
-    name="request_approval",
-    description="Registers a human-in-the-loop approval request when preflight indicates approval is required."
-)
-async def request_approval(source_id: str, format_id: str, reason: str) -> Dict[str, Any]:
+async def request_approval(
+    source_id: str,
+    format_id: str,
+    reason: str,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="acquire"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
         source = await session.get(Source, source_id)
         if not source:
             return {"error": f"Source ID '{source_id}' not found."}
+        if not source.is_permitted:
+            return {"error": "Source is forbidden by security policy."}
+        option_result = await session.execute(
+            select(SourceOption).where(
+                SourceOption.source_id == source_id,
+                SourceOption.format_id == format_id
+            )
+        )
+        option = option_result.scalar_one_or_none()
+        if not option:
+            return {"error": f"Format ID '{format_id}' is not available for source."}
 
-        user_id = await _get_default_user_id(session)
-        user = await session.get(User, user_id)
-        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}" if (user and user.portal_token) else "http://localhost:5173/"
         approval = UserApproval(
-            user_id=user_id,
+            user_id=user.id,
             source_id=source_id,
             format_id=format_id,
             status=ApprovalStatus.PENDING.value,
             reason=reason,
-            estimated_size_bytes=source.estimated_size_bytes
+            estimated_size_bytes=option.estimated_size_bytes
         )
         session.add(approval)
         await session.commit()
@@ -332,15 +532,26 @@ async def request_approval(source_id: str, format_id: str, reason: str) -> Dict[
 # =====================================================================
 # MCP TOOL 5: start_acquisition
 # =====================================================================
-@mcp.tool(
-    name="start_acquisition",
-    description="Submits an acquisition job to the engine queue and returns a Job ID for telemetry tracking."
-)
-async def start_acquisition(source_id: str, format_id: str, approval_id: Optional[str] = None, execution_mode: str = "cloud") -> Dict[str, Any]:
+async def start_acquisition(
+    source_id: str,
+    format_id: str,
+    approval_id: Optional[str] = None,
+    execution_mode: str = "cloud",
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="acquire"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
         source = await session.get(Source, source_id)
         if not source:
             return {"error": f"Source ID '{source_id}' not found."}
+        if not source.is_permitted:
+            return {"error": "Source is forbidden by security policy."}
 
         stmt_opt = select(SourceOption).where(
             SourceOption.source_id == source_id,
@@ -351,38 +562,83 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
         if not opt:
             return {"error": f"Format ID '{format_id}' is not available for source."}
 
-        # Enforce approval if required
-        needs_approval = (opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800)
+        if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
+            return {
+                "error": f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
+            }
+
+        user_id = user.id
+        dashboard_base = settings.CORS_ORIGINS[0].rstrip("/") if settings.CORS_ORIGINS else "http://localhost:5173"
+        dashboard_url = f"{dashboard_base}/portal"
+
+        cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
+        stmt_user_cache = select(Artifact).where(
+            Artifact.origin_cache_key == cache_key,
+            Artifact.user_id == user_id,
+            Artifact.is_verified == True
+        ).order_by(Artifact.created_at.desc()).limit(1)
+        user_cache_res = await session.execute(stmt_user_cache)
+        user_cached_art = user_cache_res.scalar_one_or_none()
+        user_cached_path = (
+            storage_service.get_artifact_path(user_cached_art.storage_path)
+            if user_cached_art else None
+        )
+
+        needs_approval = (
+            not user_cached_path
+            and (opt.estimated_size_bytes is None or opt.estimated_size_bytes > 52_428_800)
+        )
+        approval = None
         if needs_approval:
             if not approval_id:
                 return {
-                    "error": "Operator approval is required for this acquisition (file size exceeds 50 MB threshold), but no approval_id was provided. Call request_approval first."
+                    "error": "Operator approval is required for this acquisition (file size is unknown or exceeds 50 MB), but no approval_id was provided. Call request_approval first."
                 }
             approval = await session.get(UserApproval, approval_id)
-            if not approval or approval.status != ApprovalStatus.APPROVED.value:
+            if (
+                not approval
+                or approval.status != ApprovalStatus.APPROVED.value
+                or approval.user_id != user.id
+                or approval.source_id != source_id
+                or approval.format_id != format_id
+            ):
                 return {
-                    "error": f"Specified approval ID '{approval_id}' is not approved (status: {approval.status if approval else 'missing'})."
+                    "error": "Specified approval is missing, unapproved, or does not match this user, source, and format."
                 }
         elif approval_id:
             approval = await session.get(UserApproval, approval_id)
-            if not approval or approval.status != ApprovalStatus.APPROVED.value:
+            if (
+                not approval
+                or approval.status != ApprovalStatus.APPROVED.value
+                or approval.user_id != user.id
+                or approval.source_id != source_id
+                or approval.format_id != format_id
+            ):
                 return {
-                    "error": f"Invalid or unapproved approval ID '{approval_id}'. Current status: {approval.status if approval else 'missing'}."
+                    "error": "Specified approval is missing, unapproved, or does not match this user, source, and format."
                 }
 
-        user_id = await _get_default_user_id(session)
-        user = await session.get(User, user_id)
-        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}" if (user and user.portal_token) else "http://localhost:5173/"
-
-        # 0. Check deduplication cache for instant fulfillment
-        cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
         stmt_cache = select(Artifact).where(
             Artifact.origin_cache_key == cache_key,
             Artifact.is_verified == True
         ).order_by(Artifact.created_at.desc()).limit(1)
         cache_res = await session.execute(stmt_cache)
         cached_art = cache_res.scalar_one_or_none()
-        if cached_art and storage_service.get_artifact_path(cached_art.storage_path).exists():
+        cached_path = storage_service.get_artifact_path(cached_art.storage_path) if cached_art else None
+        if cached_art and cached_path:
+            if cached_art.user_id != user_id:
+                cached_art = Artifact(
+                    user_id=user_id,
+                    filename=cached_art.filename,
+                    mime_type=cached_art.mime_type,
+                    size_bytes=cached_art.size_bytes,
+                    sha256=cached_art.sha256,
+                    storage_path=cached_art.storage_path,
+                    is_verified=True,
+                    origin_cache_key=cache_key
+                )
+                session.add(cached_art)
+                await session.flush()
             job = AcquisitionJob(
                 user_id=user_id,
                 source_id=source_id,
@@ -439,14 +695,20 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
 # =====================================================================
 # MCP TOOL 6: get_job_status
 # =====================================================================
-@mcp.tool(
-    name="get_job_status",
-    description="Queries real-time job progress, current operation, transferred bytes, and completion state."
-)
-async def get_job_status(job_id: str) -> Dict[str, Any]:
+async def get_job_status(
+    job_id: str,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
         job = await session.get(AcquisitionJob, job_id)
-        if not job:
+        if not job or (not _is_admin_credential(user, api_key, token) and job.user_id != user.id):
             return {"error": f"Job ID '{job_id}' not found."}
 
         return {
@@ -464,14 +726,20 @@ async def get_job_status(job_id: str) -> Dict[str, Any]:
 # =====================================================================
 # MCP TOOL 7: get_artifact
 # =====================================================================
-@mcp.tool(
-    name="get_artifact",
-    description="Retrieves verified artifact metadata, SHA-256 checksum, and a secure expiring download URL."
-)
-async def get_artifact(artifact_id: str) -> Dict[str, Any]:
+async def get_artifact(
+    artifact_id: str,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     async with async_session_factory() as session:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
         art = await session.get(Artifact, artifact_id)
-        if not art:
+        if not art or not art.is_verified or (not _is_admin_credential(user, api_key, token) and art.user_id != user.id):
             return {"error": f"Artifact ID '{artifact_id}' not found."}
 
         dl_url, expires_at = storage_service.generate_delivery_url(art.id)
@@ -490,39 +758,55 @@ async def get_artifact(artifact_id: str) -> Dict[str, Any]:
 # =====================================================================
 # MCP TOOL 8: get_user_dashboard_link
 # =====================================================================
-@mcp.tool(
-    name="get_user_dashboard_link",
-    description="Generates or retrieves a unique permanent personal dashboard link that a human user can bookmark and visit anytime to monitor live acquisitions, download files, manage approvals, and explore how the platform works."
-)
-async def get_user_dashboard_link(email: Optional[str] = None) -> Dict[str, Any]:
+async def get_user_dashboard_link(
+    email: Optional[str] = None,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
     import secrets
+    access_token = get_access_token()
+    credential_type = (access_token.claims or {}).get("credential_type") if access_token else None
+    portal_token = token or os.environ.get("MCP_AUTH_TOKEN", "")
+    if access_token and credential_type != "portal":
+        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+    if not access_token and not portal_token.startswith("aae_usr_"):
+        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+    if api_key:
+        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+
     async with async_session_factory() as session:
-        if email:
+        user, auth_err = await _resolve_user_from_credentials(
+            session, api_key=api_key, token=token, required_permission="read"
+        )
+        if auth_err:
+            return {"error": auth_err}
+
+        is_admin = _is_admin_credential(user, api_key, token)
+        if email and not is_admin and settings.ENVIRONMENT.lower() not in {"development", "dev", "test"}:
+            if email.strip().lower() != user.email.lower():
+                return {"error": "Only administrators can request a dashboard link for another user."}
+
+        if email and (is_admin or email.strip().lower() == user.email.lower()):
             email_clean = email.strip().lower()
             stmt = select(User).where(User.email == email_clean)
             res = await session.execute(stmt)
-            user = res.scalar_one_or_none()
-            if not user:
-                user = User(
+            requested_user = res.scalar_one_or_none()
+            if not requested_user and is_admin:
+                requested_user = User(
                     email=email_clean,
                     hashed_password=f"auto_{secrets.token_hex(16)}",
                     role="user",
                     portal_token=f"aae_usr_{secrets.token_hex(20)}"
                 )
-                session.add(user)
+                session.add(requested_user)
                 await session.commit()
-                await session.refresh(user)
-            elif not user.portal_token:
-                user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
-                await session.commit()
-                await session.refresh(user)
-        else:
-            user_id = await _get_default_user_id(session)
-            user = await session.get(User, user_id)
-            if not user.portal_token:
-                user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
-                await session.commit()
-                await session.refresh(user)
+                await session.refresh(requested_user)
+            if requested_user:
+                user = requested_user
+        if not user.portal_token:
+            user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
+            await session.commit()
+            await session.refresh(user)
 
         dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}"
         how_it_works_url = f"http://localhost:5173/portal?token={user.portal_token}&tab=how-it-works"
@@ -535,6 +819,85 @@ async def get_user_dashboard_link(email: Optional[str] = None) -> Dict[str, Any]
             "how_it_works_url": how_it_works_url,
             "message": "Unique personal dashboard link ready. Share this link with the user so they can visit anytime to track downloads, view files, and see how the engine operates."
         }
+
+@mcp.tool(
+    name="inspect_source",
+    description="Inspects a URL or document source, checks SSRF safety and permissions, and returns metadata without downloading."
+)
+async def _mcp_inspect_source(
+    url: str,
+    ctx: Context,
+    user_preferences: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    return await inspect_source(url, user_preferences)
+
+@mcp.tool(
+    name="list_formats",
+    description="Lists downloadable formats for an inspected source."
+)
+async def _mcp_list_formats(source_id: str, ctx: Context) -> Dict[str, Any]:
+    return await list_formats(source_id)
+
+@mcp.tool(
+    name="preflight_acquisition",
+    description="Checks acquisition limits and whether user approval is required."
+)
+async def _mcp_preflight_acquisition(
+    source_id: str,
+    format_id: str,
+    ctx: Context,
+    execution_mode: str = "cloud"
+) -> Dict[str, Any]:
+    return await preflight_acquisition(source_id, format_id, execution_mode)
+
+@mcp.tool(
+    name="request_approval",
+    description="Creates a user approval request for an acquisition."
+)
+async def _mcp_request_approval(
+    source_id: str,
+    format_id: str,
+    reason: str,
+    ctx: Context
+) -> Dict[str, Any]:
+    return await request_approval(source_id, format_id, reason)
+
+@mcp.tool(
+    name="start_acquisition",
+    description="Queues an approved acquisition and returns its job ID."
+)
+async def _mcp_start_acquisition(
+    source_id: str,
+    format_id: str,
+    ctx: Context,
+    approval_id: Optional[str] = None,
+    execution_mode: str = "cloud"
+) -> Dict[str, Any]:
+    return await start_acquisition(source_id, format_id, approval_id, execution_mode)
+
+@mcp.tool(
+    name="get_job_status",
+    description="Returns progress for a job owned by the authenticated user."
+)
+async def _mcp_get_job_status(job_id: str, ctx: Context) -> Dict[str, Any]:
+    return await get_job_status(job_id)
+
+@mcp.tool(
+    name="get_artifact",
+    description="Returns verified metadata and an expiring download link for a user-owned artifact."
+)
+async def _mcp_get_artifact(artifact_id: str, ctx: Context) -> Dict[str, Any]:
+    return await get_artifact(artifact_id)
+
+@mcp.tool(
+    name="get_user_dashboard_link",
+    description="Returns the authenticated user's dashboard link. Requires a user portal credential; agent keys are refused."
+)
+async def _mcp_get_user_dashboard_link(
+    ctx: Context,
+    email: Optional[str] = None
+) -> Dict[str, Any]:
+    return await get_user_dashboard_link(email)
 
 async def run_server():
     """Initializes tables and starts MCP server over stdio."""

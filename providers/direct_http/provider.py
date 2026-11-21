@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import hashlib
+import logging
 import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Awaitable
@@ -20,6 +21,9 @@ from apps.api.app.security.ssrf import SSRFValidator
 from apps.api.app.security.sanitization import sanitize_filename
 from apps.api.app.services.verification import FileVerifier, VerificationResult
 from providers.direct_http.chunked_downloader import ChunkedDownloader
+from providers.direct_http.safe_http import send_with_safe_redirects
+
+logger = logging.getLogger("aae.direct_http")
 
 def infer_file_type_from_mime(mime: str, filename: str = "") -> str:
     m = (mime or "").lower()
@@ -108,45 +112,16 @@ class DirectHTTPProvider(BaseProviderContract):
             )
 
         headers = {"User-Agent": "AgentAcquisitionEngine/1.0"}
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, trust_env=False) as client:
             try:
-                # 1. Try HEAD request first
-                resp = await client.head(url, headers=headers)
+                resp = await send_with_safe_redirects(client, "HEAD", url, headers)
                 if resp.status_code == 405 or resp.status_code == 501:
-                    # HEAD not allowed, fallback to ranged GET for 1 byte
+                    await resp.aclose()
                     ranged_headers = dict(headers)
                     ranged_headers["Range"] = "bytes=0-0"
-                    resp = await client.get(url, headers=ranged_headers)
+                    resp = await send_with_safe_redirects(client, "GET", url, ranged_headers)
 
-                final_url = url
-                # Check redirect hops if redirect returned
-                while resp.is_redirect:
-                    next_url = resp.headers.get("location")
-                    if not next_url:
-                        break
-                    from urllib.parse import urljoin
-                    next_url = urljoin(final_url, next_url)
-                    final_url = next_url
-                    # Validate next redirect against SSRF
-                    safe_redirect, redirect_err = SSRFValidator.validate_url(next_url)
-                    if not safe_redirect:
-                        return SourceInspectionResponse(
-                            source_id=f"src_{uuid.uuid4().hex[:12]}",
-                            url=url,
-                            resolved_url=final_url,
-                            source_type=SourceType.UNSUPPORTED_SOURCE,
-                            provider_id=self.provider_id,
-                            is_permitted=False,
-                            security_status=SecurityStatus.BLOCKED,
-                            acquisition_permission=AcquisitionPermission.RESTRICTED,
-                            source_access_status=SourceAccessStatus.BLOCKED,
-                            capabilities=[],
-                            mime_type=None,
-                            estimated_size_bytes=None,
-                            inspection_status="failed",
-                            errors=[f"Redirect to blocked target '{next_url}': {redirect_err}"]
-                        )
-                    resp = await client.head(next_url, headers=headers)
+                final_url = str(resp.url)
 
                 if resp.status_code in {401, 403}:
                     return SourceInspectionResponse(
@@ -289,19 +264,26 @@ class DirectHTTPProvider(BaseProviderContract):
         mime_type = "application/octet-stream"
         total_bytes: Optional[int] = None
 
-        headers = {"User-Agent": "AgentAcquisitionEngine/1.0"}
+        headers = {
+            "User-Agent": "AgentAcquisitionEngine/1.0",
+            "Accept-Encoding": "identity"
+        }
 
         # Probe headers for true filename and MIME
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                head_resp = await client.head(url, headers=headers)
-                extracted_filename = extract_filename_from_headers(head_resp.headers, str(head_resp.url))
-                mime_type = head_resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
-                cl = head_resp.headers.get("content-length")
-                if cl and cl.isdigit():
-                    total_bytes = int(cl)
-        except Exception:
-            pass
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, trust_env=False) as client:
+            try:
+                head_resp = await send_with_safe_redirects(client, "HEAD", url, headers)
+            except httpx.HTTPError as e:
+                logger.warning("Unable to read download metadata for %s: %s", url, e)
+            else:
+                try:
+                    extracted_filename = extract_filename_from_headers(head_resp.headers, str(head_resp.url))
+                    mime_type = head_resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
+                    cl = head_resp.headers.get("content-length")
+                    if cl and cl.isdigit():
+                        total_bytes = int(cl)
+                finally:
+                    await head_resp.aclose()
 
         downloader = ChunkedDownloader(concurrency=4)
         dl_res = await downloader.download(

@@ -7,7 +7,8 @@ from typing import Optional, Dict, Any
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import User, AcquisitionJob, Artifact, UserApproval
-from apps.api.app.security.auth import get_authenticated_user_or_agent
+from apps.api.app.security.auth import get_authenticated_portal_user
+from apps.api.app.config import settings
 from packages.shared_schemas.models import JobState, ApprovalStatus
 
 router = APIRouter(prefix="/users", tags=["Users & Personal Dashboards"])
@@ -39,7 +40,7 @@ def _format_dashboard_url(portal_token: str) -> str:
 
 @router.get("/me", response_model=UserProfileResponse)
 async def get_my_profile(
-    user: User = Depends(get_authenticated_user_or_agent),
+    user: User = Depends(get_authenticated_portal_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -96,14 +97,26 @@ async def get_my_profile(
 
 @router.post("/portal-link", response_model=PortalLinkResponse)
 async def get_or_create_portal_link(
-    req: PortalLinkRequest,
-    db: AsyncSession = Depends(get_db)
+    req: Optional[PortalLinkRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    authenticated_user: User = Depends(get_authenticated_portal_user)
 ):
     """
     Retrieves or generates a permanent personal dashboard link for any user.
     If an email is provided, finds the existing user or creates a new one.
     If no email is provided, provisions a fresh dedicated workspace user.
     """
+    if req is None:
+        req = PortalLinkRequest()
+    if settings.ENVIRONMENT.lower() not in {"development", "dev", "test"}:
+        if req.email and authenticated_user.role != "admin" and req.email.strip().lower() != authenticated_user.email.lower():
+            raise HTTPException(
+                status_code=403,
+                detail="Only administrators can provision a portal link for another user."
+            )
+        if not req.email:
+            req.email = authenticated_user.email
+
     created = False
     if req.email:
         email = req.email.strip().lower()

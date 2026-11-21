@@ -110,7 +110,7 @@ class AcquisitionJob(Base):
     current_operation = Column(String(100), default="Job initialized", nullable=False)
     error_message = Column(Text, nullable=True)
     artifact_id = Column(String(36), ForeignKey("artifacts.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     user = relationship("User", back_populates="jobs")

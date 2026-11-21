@@ -42,8 +42,12 @@ def verify_signed_delivery_token(token: str, secret_key: str) -> Tuple[bool, Opt
 
     try:
         payload_bytes = base64.urlsafe_b64decode(payload_padded)
+        if base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=") != payload_b64:
+            return False, None, "Non-canonical delivery token payload encoding."
         expected_sig = hmac.new(secret_key.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
         actual_sig = base64.urlsafe_b64decode(sig_padded)
+        if base64.urlsafe_b64encode(actual_sig).decode("ascii").rstrip("=") != sig_b64:
+            return False, None, "Non-canonical delivery token signature encoding."
     except Exception as e:
         return False, None, f"Token decode failure: {str(e)}"
 
@@ -55,14 +59,18 @@ def verify_signed_delivery_token(token: str, secret_key: str) -> Tuple[bool, Opt
     except Exception:
         return False, None, "Corrupted token payload."
 
+    if not isinstance(payload, dict):
+        return False, None, "Invalid delivery token payload."
+
     artifact_id = payload.get("art_id")
-    expires_at = payload.get("exp", 0)
+    expires_at = payload.get("exp")
 
-    if time.time() > expires_at:
-        return False, None, "Delivery link has expired."
-
-    if not artifact_id:
+    if not isinstance(artifact_id, str) or not artifact_id:
         return False, None, "Missing artifact identity in token."
+    if type(expires_at) is not int:
+        return False, None, "Invalid expiration in token."
+    if time.time() >= expires_at:
+        return False, None, "Delivery link has expired."
 
     return True, artifact_id, None
 

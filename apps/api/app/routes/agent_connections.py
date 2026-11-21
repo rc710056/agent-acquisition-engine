@@ -1,21 +1,28 @@
 import secrets
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import AgentConnection, User
 from apps.api.app.security.tokens import hash_api_key
-from apps.api.app.security.auth import get_authenticated_user_or_agent
+from apps.api.app.security.auth import get_authenticated_portal_user, require_permission, is_admin_request
 
 router = APIRouter(prefix="/connections", tags=["Agent Connections"])
 
 class CreateConnectionRequest(BaseModel):
     agent_name: str
-    permissions: Optional[List[str]] = ["read", "acquire"]
+    permissions: List[str] = Field(default_factory=lambda: ["read", "acquire"])
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, permissions: List[str]) -> List[str]:
+        if not permissions or "read" not in permissions or not set(permissions).issubset({"read", "acquire"}):
+            raise ValueError("Agent permissions must include 'read' and may only include 'acquire'.")
+        return permissions
 
 class ConnectionResponse(BaseModel):
     id: str
@@ -29,7 +36,7 @@ class ConnectionResponse(BaseModel):
 async def create_agent_connection(
     req: CreateConnectionRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(get_authenticated_portal_user)
 ):
     raw_api_key = f"aae_live_{secrets.token_urlsafe(32)}"
     hashed_key = hash_api_key(raw_api_key)
@@ -55,11 +62,12 @@ async def create_agent_connection(
 
 @router.get("", response_model=List[ConnectionResponse])
 async def list_agent_connections(
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     stmt = select(AgentConnection)
-    if user.role != "admin":
+    if not is_admin_request(request, user):
         stmt = stmt.where(AgentConnection.user_id == user.id)
     stmt = stmt.order_by(AgentConnection.created_at.desc())
     res = await db.execute(stmt)
@@ -80,12 +88,10 @@ async def list_agent_connections(
 async def revoke_agent_connection(
     connection_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(get_authenticated_portal_user)
 ):
     conn = await db.get(AgentConnection, connection_id)
     if not conn or (user.role != "admin" and conn.user_id != user.id):
         raise HTTPException(status_code=404, detail="Connection not found.")
-    await db.delete(conn)
-    await db.commit()
     await db.delete(conn)
     await db.commit()

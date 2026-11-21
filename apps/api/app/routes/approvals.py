@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
@@ -7,7 +7,11 @@ from pydantic import BaseModel
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import UserApproval, Source, SourceOption, User
-from apps.api.app.security.auth import get_authenticated_user_or_agent
+from apps.api.app.security.auth import (
+    require_permission,
+    get_authenticated_portal_user,
+    is_admin_request
+)
 from packages.shared_schemas.models import (
     ApprovalRequestCreate,
     ApprovalResponse,
@@ -30,11 +34,12 @@ class ApprovalDetailResponse(BaseModel):
 
 @router.get("", response_model=list[ApprovalDetailResponse])
 async def list_approvals(
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     stmt = select(UserApproval)
-    if user.role != "admin":
+    if not is_admin_request(request, user):
         stmt = stmt.where(UserApproval.user_id == user.id)
     stmt = stmt.order_by(UserApproval.created_at.desc()).limit(100)
     res = await db.execute(stmt)
@@ -56,11 +61,23 @@ async def list_approvals(
 async def request_approval(
     req: ApprovalRequestCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("acquire"))
 ):
     source = await db.get(Source, req.source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
+    if not source.is_permitted:
+        raise HTTPException(status_code=403, detail="Acquisition from this source is forbidden by policy.")
+
+    option_result = await db.execute(
+        select(SourceOption).where(
+            SourceOption.source_id == req.source_id,
+            SourceOption.format_id == req.format_id
+        )
+    )
+    option = option_result.scalar_one_or_none()
+    if not option:
+        raise HTTPException(status_code=404, detail="Format not found for source.")
 
     approval = UserApproval(
         user_id=user.id,
@@ -68,7 +85,7 @@ async def request_approval(
         format_id=req.format_id,
         status=ApprovalStatus.PENDING.value,
         reason=req.reason,
-        estimated_size_bytes=source.estimated_size_bytes
+        estimated_size_bytes=option.estimated_size_bytes
     )
     db.add(approval)
     await db.commit()
@@ -84,11 +101,12 @@ async def request_approval(
 @router.get("/{approval_id}", response_model=ApprovalResponse)
 async def get_approval(
     approval_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(require_permission("read"))
 ):
     approval = await db.get(UserApproval, approval_id)
-    if not approval or (user.role != "admin" and approval.user_id != user.id):
+    if not approval or (not is_admin_request(request, user) and approval.user_id != user.id):
         raise HTTPException(status_code=404, detail="Approval request not found.")
 
     return ApprovalResponse(
@@ -102,11 +120,12 @@ async def get_approval(
 async def decide_approval(
     approval_id: str,
     req: ApprovalDecisionRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_authenticated_user_or_agent)
+    user: User = Depends(get_authenticated_portal_user)
 ):
     approval = await db.get(UserApproval, approval_id)
-    if not approval or (user.role != "admin" and approval.user_id != user.id):
+    if not approval or (not is_admin_request(request, user) and approval.user_id != user.id):
         raise HTTPException(status_code=404, detail="Approval request not found.")
 
     if approval.status != ApprovalStatus.PENDING.value:

@@ -48,13 +48,19 @@ class SSRFValidator:
 
         if scheme not in cls.ALLOWED_SCHEMES:
             return False, f"Unsupported scheme '{parsed.scheme}'. Only http, https, and magnet are permitted."
+        if parsed.username is not None or parsed.password is not None:
+            return False, "URLs containing embedded credentials are not permitted."
 
         hostname = parsed.hostname
         if not hostname:
             return False, "URL is missing a valid hostname."
 
         # Check raw IP or resolve domain
-        is_safe, reason = cls.resolve_and_validate_host(hostname, parsed.port)
+        try:
+            port = parsed.port
+        except ValueError:
+            return False, "URL contains an invalid port."
+        is_safe, reason = cls.resolve_and_validate_host(hostname, port)
         if not is_safe:
             return False, reason
 
@@ -104,20 +110,12 @@ class SSRFValidator:
 
     @classmethod
     def _is_ip_allowed(cls, ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> Tuple[bool, Optional[str]]:
-        if ip.is_loopback:
-            return False, "Loopback addresses are forbidden."
-        if ip.is_private:
-            return False, "Private/internal RFC-1918 network addresses are forbidden."
-        if ip.is_link_local:
-            return False, "Link-local / cloud metadata addresses (169.254.x.x) are forbidden."
-        if ip.is_reserved:
-            return False, "Reserved IP space is forbidden."
-        if ip.is_multicast:
-            return False, "Multicast addresses are forbidden."
-
         for blocked in BLOCKED_NETWORKS:
             if ip in blocked:
                 return False, f"IP belongs to blocked network range {blocked}."
+
+        if not ip.is_global:
+            return False, "Non-global IP addresses are forbidden."
 
         return True, None
 

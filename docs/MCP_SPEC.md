@@ -1,8 +1,14 @@
 # Model Context Protocol (MCP) Server Specification
 
-The Agent Acquisition Engine MCP Server implements the standard Model Context Protocol over Stdio and Streamable HTTP (SSE). External AI agents configure this server in their client settings to gain file acquisition tools.
+The Agent Acquisition Engine MCP Server exposes acquisition tools over local stdio and authenticated SSE mounted on the API at `/mcp/sse` (port 8000). Stdio runs against the local checkout's configured database and storage; remote agents should use the API endpoint. Authenticated requests require an agent API key in `Authorization: Bearer <key>`. Do not send credentials as tool arguments.
+
+Agent credentials are scoped to a user and permissions. `read` allows source, job, and artifact inspection; `acquire` allows requesting and starting acquisitions. Agent credentials cannot decide pending approvals, manage portal credentials, or access another user's resources. Approval decisions must be made through the authenticated user portal.
+
+New acquisitions over 50 MB and acquisitions with unknown size require explicit user approval by default; the configured acquisition limit is 500 MB. Reusing a verified artifact already in that user's vault does not require a new approval. An approval is bound to the requesting user, source, and format. The user must approve it before the agent can start that acquisition.
 
 ## Supported MCP Tools
+
+The server registers eight tools: `inspect_source`, `list_formats`, `preflight_acquisition`, `request_approval`, `start_acquisition`, `get_job_status`, `get_artifact`, and `get_user_dashboard_link`. Credential values are supplied by the MCP transport/authentication context, not exposed as tool input fields. `get_user_dashboard_link` requires a user portal credential and rejects agent API keys.
 
 ### 1. `inspect_source`
 - **Description**: Probes a target URL or identifier, assesses SSRF safety and permissions, and returns source metadata.

@@ -16,17 +16,18 @@ async def test_chunked_downloader_sequential_fallback(tmp_path: Path):
     async def aiter_bytes(chunk_size=65536):
         yield test_content
     mock_resp.aiter_bytes = aiter_bytes
+    mock_resp.aclose = AsyncMock()
 
-    mock_stream = AsyncMock()
-    mock_stream.__aenter__.return_value = mock_resp
-    mock_stream.__aexit__.return_value = None
-
-    with patch("httpx.AsyncClient.stream", return_value=mock_stream):
-        res = await downloader.download(
-            url="https://example.com/file.bin",
-            destination_path=dest_path,
-            total_bytes=len(test_content)
-        )
+    with patch.object(downloader, "probe_range_support", return_value=(False, None)):
+        with patch(
+            "providers.direct_http.chunked_downloader.send_with_safe_redirects",
+            new=AsyncMock(return_value=mock_resp)
+        ):
+            res = await downloader.download(
+                url="https://example.com/file.bin",
+                destination_path=dest_path,
+                total_bytes=len(test_content)
+            )
 
     assert dest_path.exists()
     assert dest_path.read_bytes() == test_content
