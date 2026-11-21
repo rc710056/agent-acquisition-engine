@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
+from typing import Optional, List
 from pydantic import BaseModel
 
 from apps.api.app.models.database import get_db

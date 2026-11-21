@@ -18,9 +18,33 @@ async_session_factory = async_sessionmaker(
 )
 
 async def init_db() -> None:
-    """Initializes database tables if they do not exist."""
+    """Initializes database tables if they do not exist and runs safe column additions."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        def _check_and_add_columns(connection):
+            from sqlalchemy import inspect, text
+            inspector = inspect(connection)
+            if "sources" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("sources")]
+                if "source_type" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN source_type VARCHAR(50) DEFAULT 'DIRECT_FILE' NOT NULL"))
+                if "security_status" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN security_status VARCHAR(50) DEFAULT 'safe' NOT NULL"))
+                if "acquisition_permission" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN acquisition_permission VARCHAR(50) DEFAULT 'permitted' NOT NULL"))
+                if "source_access_status" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN source_access_status VARCHAR(50) DEFAULT 'accessible' NOT NULL"))
+                if "title" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN title TEXT"))
+                if "thumbnail_url" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN thumbnail_url TEXT"))
+                if "assets_metadata" not in cols:
+                    connection.execute(text("ALTER TABLE sources ADD COLUMN assets_metadata JSON"))
+            if "source_options" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("source_options")]
+                if "download_url" not in cols:
+                    connection.execute(text("ALTER TABLE source_options ADD COLUMN download_url TEXT"))
+        await conn.run_sync(_check_and_add_columns)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency for obtaining async database sessions."""

@@ -1,0 +1,3 @@
+from providers.pinterest.provider import PinterestProvider
+
+__all__ = ["PinterestProvider"]

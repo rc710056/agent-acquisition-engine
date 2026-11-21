@@ -8,7 +8,14 @@ from typing import Optional, List, Dict, Any, Callable, Awaitable
 from urllib.parse import urlparse, unquote
 
 from packages.provider_contracts.base import BaseProviderContract
-from packages.shared_schemas.models import FormatOption, SourceInspectionResponse
+from packages.shared_schemas.models import (
+    FormatOption,
+    SourceInspectionResponse,
+    SourceType,
+    SecurityStatus,
+    AcquisitionPermission,
+    SourceAccessStatus
+)
 from apps.api.app.security.ssrf import SSRFValidator
 from apps.api.app.security.sanitization import sanitize_filename
 from apps.api.app.services.verification import FileVerifier, VerificationResult
@@ -66,7 +73,18 @@ class DirectHTTPProvider(BaseProviderContract):
         if not url:
             return False
         parsed = urlparse(url)
-        return parsed.scheme.lower() in {"http", "https"}
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return False
+        # Do not greedily claim known video/media platform domains
+        netloc = parsed.netloc.lower()
+        excluded_domains = [
+            "pin.it", "pinterest.com", "youtube.com", "youtu.be",
+            "vimeo.com", "reddit.com", "v.redd.it", "tiktok.com",
+            "instagram.com", "twitter.com", "x.com"
+        ]
+        if any(d in netloc for d in excluded_domains):
+            return False
+        return True
 
     async def inspect(self, url: str) -> SourceInspectionResponse:
         is_safe, error = SSRFValidator.validate_url(url)
@@ -74,8 +92,13 @@ class DirectHTTPProvider(BaseProviderContract):
             return SourceInspectionResponse(
                 source_id=f"src_{uuid.uuid4().hex[:12]}",
                 url=url,
+                resolved_url=url,
+                source_type=SourceType.UNSUPPORTED_SOURCE,
                 provider_id=self.provider_id,
                 is_permitted=False,
+                security_status=SecurityStatus.BLOCKED,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.BLOCKED,
                 capabilities=[],
                 mime_type=None,
                 estimated_size_bytes=None,
@@ -94,19 +117,28 @@ class DirectHTTPProvider(BaseProviderContract):
                     ranged_headers["Range"] = "bytes=0-0"
                     resp = await client.get(url, headers=ranged_headers)
 
+                final_url = url
                 # Check redirect hops if redirect returned
                 while resp.is_redirect:
                     next_url = resp.headers.get("location")
                     if not next_url:
                         break
+                    from urllib.parse import urljoin
+                    next_url = urljoin(final_url, next_url)
+                    final_url = next_url
                     # Validate next redirect against SSRF
                     safe_redirect, redirect_err = SSRFValidator.validate_url(next_url)
                     if not safe_redirect:
                         return SourceInspectionResponse(
                             source_id=f"src_{uuid.uuid4().hex[:12]}",
                             url=url,
+                            resolved_url=final_url,
+                            source_type=SourceType.UNSUPPORTED_SOURCE,
                             provider_id=self.provider_id,
                             is_permitted=False,
+                            security_status=SecurityStatus.BLOCKED,
+                            acquisition_permission=AcquisitionPermission.RESTRICTED,
+                            source_access_status=SourceAccessStatus.BLOCKED,
                             capabilities=[],
                             mime_type=None,
                             estimated_size_bytes=None,
@@ -115,12 +147,35 @@ class DirectHTTPProvider(BaseProviderContract):
                         )
                     resp = await client.head(next_url, headers=headers)
 
+                if resp.status_code in {401, 403}:
+                    return SourceInspectionResponse(
+                        source_id=f"src_{uuid.uuid4().hex[:12]}",
+                        url=url,
+                        resolved_url=final_url,
+                        source_type=SourceType.UNSUPPORTED_SOURCE,
+                        provider_id=self.provider_id,
+                        is_permitted=False,
+                        security_status=SecurityStatus.SAFE,
+                        acquisition_permission=AcquisitionPermission.USER_AUTHORIZATION_REQUIRED,
+                        source_access_status=SourceAccessStatus.AUTHENTICATION_REQUIRED,
+                        capabilities=[],
+                        mime_type=None,
+                        estimated_size_bytes=None,
+                        inspection_status="restricted",
+                        errors=[f"HTTP server returned status {resp.status_code}: Authentication required."]
+                    )
+
                 if resp.status_code >= 400:
                     return SourceInspectionResponse(
                         source_id=f"src_{uuid.uuid4().hex[:12]}",
                         url=url,
+                        resolved_url=final_url,
+                        source_type=SourceType.UNSUPPORTED_SOURCE,
                         provider_id=self.provider_id,
                         is_permitted=False,
+                        security_status=SecurityStatus.SAFE,
+                        acquisition_permission=AcquisitionPermission.UNKNOWN,
+                        source_access_status=SourceAccessStatus.UNAVAILABLE,
                         capabilities=[],
                         mime_type=None,
                         estimated_size_bytes=None,
@@ -128,31 +183,74 @@ class DirectHTTPProvider(BaseProviderContract):
                         errors=[f"HTTP server returned error status code {resp.status_code}."]
                     )
 
-                content_type = resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
+                content_type = resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip().lower()
                 content_length = resp.headers.get("content-length")
                 size_bytes = int(content_length) if (content_length and content_length.isdigit()) else None
+
+                # CRITICAL RULE: text/html is NOT a direct downloadable file!
+                if content_type == "text/html":
+                    return SourceInspectionResponse(
+                        source_id=f"src_{uuid.uuid4().hex[:12]}",
+                        url=url,
+                        resolved_url=final_url,
+                        source_type=SourceType.UNSUPPORTED_SOURCE,
+                        provider_id=self.provider_id,
+                        is_permitted=False,
+                        security_status=SecurityStatus.SAFE,
+                        acquisition_permission=AcquisitionPermission.RESTRICTED,
+                        source_access_status=SourceAccessStatus.ACCESSIBLE,
+                        capabilities=[],
+                        mime_type=content_type,
+                        estimated_size_bytes=size_bytes,
+                        inspection_status="failed",
+                        errors=["Direct HTTP Provider does not treat HTML webpages ('text/html') as downloadable files."]
+                    )
 
                 capabilities = ["direct_stream"]
                 if "bytes" in resp.headers.get("accept-ranges", "").lower():
                     capabilities.append("resume")
 
+                filename = extract_filename_from_headers(resp.headers, final_url)
+                file_type = infer_file_type_from_mime(content_type, filename)
+                format_opt = FormatOption(
+                    format_id="original",
+                    file_type=file_type,
+                    mime_type=content_type,
+                    resolution=None,
+                    codec=None,
+                    estimated_size_bytes=size_bytes,
+                    quality_label="original",
+                    download_url=final_url
+                )
+
                 return SourceInspectionResponse(
                     source_id=f"src_{uuid.uuid4().hex[:12]}",
                     url=url,
+                    resolved_url=final_url,
+                    source_type=SourceType.DIRECT_FILE,
                     provider_id=self.provider_id,
                     is_permitted=True,
+                    security_status=SecurityStatus.SAFE,
+                    acquisition_permission=AcquisitionPermission.PERMITTED,
+                    source_access_status=SourceAccessStatus.ACCESSIBLE,
                     capabilities=capabilities,
                     mime_type=content_type,
                     estimated_size_bytes=size_bytes,
                     inspection_status="inspected",
+                    formats=[format_opt],
                     errors=[]
                 )
             except Exception as e:
                 return SourceInspectionResponse(
                     source_id=f"src_{uuid.uuid4().hex[:12]}",
                     url=url,
+                    resolved_url=url,
+                    source_type=SourceType.UNSUPPORTED_SOURCE,
                     provider_id=self.provider_id,
                     is_permitted=False,
+                    security_status=SecurityStatus.SAFE,
+                    acquisition_permission=AcquisitionPermission.UNKNOWN,
+                    source_access_status=SourceAccessStatus.UNAVAILABLE,
                     capabilities=[],
                     mime_type=None,
                     estimated_size_bytes=None,
@@ -162,22 +260,9 @@ class DirectHTTPProvider(BaseProviderContract):
 
     async def list_formats(self, url: str) -> List[FormatOption]:
         inspection = await self.inspect(url)
-        mime = inspection.mime_type or "application/octet-stream"
-        filename = os.path.basename(urlparse(url).path)
-        file_type = infer_file_type_from_mime(mime, filename)
-
-        return [
-            FormatOption(
-                format_id="original",
-                file_type=file_type,
-                mime_type=mime,
-                resolution=None,
-                codec=None,
-                estimated_size_bytes=inspection.estimated_size_bytes,
-                quality_label="original",
-                provider_restrictions=[]
-            )
-        ]
+        if not inspection.is_permitted or not inspection.formats:
+            return []
+        return inspection.formats
 
     async def check_permissions(self, url: str) -> tuple[bool, List[str]]:
         is_safe, error = SSRFValidator.validate_url(url)

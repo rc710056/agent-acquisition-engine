@@ -44,6 +44,12 @@ async def preflight_acquisition(req: PreflightRequest, db: AsyncSession = Depend
         raise HTTPException(status_code=404, detail="Source not found.")
 
     if not source.is_permitted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acquisition from this source is forbidden by policy or access controls."
+        )
+
+    if not source.is_permitted:
         return PreflightResponse(
             can_acquire=False,
             requires_approval=False,
@@ -103,6 +109,12 @@ async def create_job(
     source = await db.get(Source, req.source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
+
+    if not source.is_permitted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acquisition from this source is forbidden by policy or access controls."
+        )
 
     # Validate format and check if approval is required
     stmt_opt = select(SourceOption).where(

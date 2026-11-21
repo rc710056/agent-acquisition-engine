@@ -14,7 +14,14 @@ from apps.api.app.models.entities import (
     Artifact,
     User
 )
-from packages.shared_schemas.models import JobState, ApprovalStatus
+from packages.shared_schemas.models import (
+    JobState,
+    ApprovalStatus,
+    SourceType,
+    SecurityStatus,
+    AcquisitionPermission,
+    SourceAccessStatus
+)
 from providers.registry import provider_registry
 from apps.api.app.services.storage import storage_service
 
@@ -46,34 +53,69 @@ async def _get_default_user_id(session) -> str:
 )
 async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     url = url.strip()
-    provider = provider_registry.find_provider_for_url(url)
+    provider, classification = await provider_registry.resolve_provider_with_classifier(url)
+
     if not provider:
         return {
+            "source_id": f"src_unsupported_{url[:8]}",
+            "url": url,
+            "resolved_url": classification.resolved_url,
+            "source_type": classification.source_type.value,
+            "provider": "unsupported",
             "is_permitted": False,
-            "errors": [f"No provider found to handle target URL: {url}"],
-            "inspection_status": "unsupported"
+            "security_status": classification.security_status.value,
+            "acquisition_permission": classification.acquisition_permission.value,
+            "source_access_status": classification.source_access_status.value,
+            "capabilities": [],
+            "mime_type": classification.mime_type,
+            "estimated_size_bytes": classification.estimated_size_bytes,
+            "inspection_status": "unsupported",
+            "errors": classification.errors or [f"No provider found capable of acquiring source: {url}"]
         }
 
     inspection = await provider.inspect(url)
+    if not inspection.resolved_url:
+        inspection.resolved_url = classification.resolved_url
+    if inspection.source_type == SourceType.DIRECT_FILE and classification.source_type != SourceType.DIRECT_FILE:
+        inspection.source_type = classification.source_type
 
     async with async_session_factory() as session:
         stmt = select(Source).where(Source.url == url)
         res = await session.execute(stmt)
         existing = res.scalar_one_or_none()
 
+        assets_data = [a.model_dump() for a in inspection.assets] if inspection.assets else None
+
         if existing:
+            existing.canonical_url = inspection.resolved_url
+            existing.source_type = inspection.source_type.value
+            existing.provider_id = inspection.provider_id
             existing.content_type = inspection.mime_type
             existing.estimated_size_bytes = inspection.estimated_size_bytes
             existing.is_permitted = inspection.is_permitted
+            existing.security_status = inspection.security_status.value
+            existing.acquisition_permission = inspection.acquisition_permission.value
+            existing.source_access_status = inspection.source_access_status.value
+            existing.title = inspection.title
+            existing.thumbnail_url = inspection.thumbnail_url
+            existing.assets_metadata = assets_data
             existing.inspection_status = inspection.inspection_status
             source_id = existing.id
         else:
             new_source = Source(
                 url=url,
-                provider_id=provider.provider_id,
+                canonical_url=inspection.resolved_url,
+                source_type=inspection.source_type.value,
+                provider_id=inspection.provider_id,
                 content_type=inspection.mime_type,
                 estimated_size_bytes=inspection.estimated_size_bytes,
                 is_permitted=inspection.is_permitted,
+                security_status=inspection.security_status.value,
+                acquisition_permission=inspection.acquisition_permission.value,
+                source_access_status=inspection.source_access_status.value,
+                title=inspection.title,
+                thumbnail_url=inspection.thumbnail_url,
+                assets_metadata=assets_data,
                 inspection_status=inspection.inspection_status
             )
             session.add(new_source)
@@ -81,35 +123,40 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
             source_id = new_source.id
 
         if inspection.is_permitted:
-            formats = await provider.list_formats(url)
+            formats = inspection.formats or await provider.list_formats(url)
+            from sqlalchemy import delete
+            await session.execute(delete(SourceOption).where(SourceOption.source_id == source_id))
             for fmt in formats:
-                stmt_opt = select(SourceOption).where(
-                    SourceOption.source_id == source_id,
-                    SourceOption.format_id == fmt.format_id
-                )
-                opt_res = await session.execute(stmt_opt)
-                if not opt_res.scalar_one_or_none():
-                    session.add(SourceOption(
-                        source_id=source_id,
-                        format_id=fmt.format_id,
-                        file_type=fmt.file_type,
-                        mime_type=fmt.mime_type,
-                        resolution=fmt.resolution,
-                        codec=fmt.codec,
-                        estimated_size_bytes=fmt.estimated_size_bytes,
-                        quality_label=fmt.quality_label
-                    ))
+                session.add(SourceOption(
+                    source_id=source_id,
+                    format_id=fmt.format_id,
+                    file_type=fmt.file_type,
+                    mime_type=fmt.mime_type,
+                    resolution=fmt.resolution,
+                    codec=fmt.codec,
+                    estimated_size_bytes=fmt.estimated_size_bytes,
+                    quality_label=fmt.quality_label,
+                    download_url=fmt.download_url
+                ))
         await session.commit()
 
     return {
         "source_id": source_id,
         "url": url,
+        "resolved_url": inspection.resolved_url,
+        "source_type": inspection.source_type.value,
         "provider": provider.provider_id,
         "is_permitted": inspection.is_permitted,
+        "security_status": inspection.security_status.value,
+        "acquisition_permission": inspection.acquisition_permission.value,
+        "source_access_status": inspection.source_access_status.value,
         "capabilities": inspection.capabilities,
         "mime_type": inspection.mime_type,
         "estimated_size_bytes": inspection.estimated_size_bytes,
         "inspection_status": inspection.inspection_status,
+        "title": inspection.title,
+        "assets": [a.model_dump() for a in inspection.assets],
+        "formats_count": len(inspection.formats),
         "errors": inspection.errors
     }
 

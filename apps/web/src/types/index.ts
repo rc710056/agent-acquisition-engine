@@ -1,12 +1,21 @@
 export interface SourceInspection {
   source_id: string;
   url: string;
+  resolved_url?: string | null;
+  source_type?: string;
   provider_id: string;
   is_permitted: boolean;
+  security_status?: string;
+  acquisition_permission?: string;
+  source_access_status?: string;
   capabilities: string[];
   mime_type: string | null;
   estimated_size_bytes: number | null;
   inspection_status: string;
+  title?: string | null;
+  thumbnail_url?: string | null;
+  assets?: any[];
+  formats?: FormatOption[];
   errors: string[];
 }
 

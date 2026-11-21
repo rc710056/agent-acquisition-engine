@@ -3,6 +3,32 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, HttpUrl
 from datetime import datetime
 
+class SourceType(str, Enum):
+    DIRECT_FILE = "DIRECT_FILE"
+    WEBPAGE_WITH_MEDIA = "WEBPAGE_WITH_MEDIA"
+    PLATFORM_MEDIA_PAGE = "PLATFORM_MEDIA_PAGE"
+    MEDIA_COLLECTION = "MEDIA_COLLECTION"
+    SHORT_URL = "SHORT_URL"
+    DOCUMENT_PAGE = "DOCUMENT_PAGE"
+    UNSUPPORTED_SOURCE = "UNSUPPORTED_SOURCE"
+
+class SecurityStatus(str, Enum):
+    SAFE = "safe"
+    BLOCKED = "blocked"
+    REQUIRES_REVIEW = "requires_review"
+
+class AcquisitionPermission(str, Enum):
+    PERMITTED = "permitted"
+    USER_AUTHORIZATION_REQUIRED = "user_authorization_required"
+    RESTRICTED = "restricted"
+    UNKNOWN = "unknown"
+
+class SourceAccessStatus(str, Enum):
+    ACCESSIBLE = "accessible"
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    UNAVAILABLE = "unavailable"
+    BLOCKED = "blocked"
+
 class JobState(str, Enum):
     CREATED = "created"
     UNDERSTANDING = "understanding"
@@ -32,6 +58,17 @@ class SourceInspectionRequest(BaseModel):
     url: str
     user_preferences: Optional[Dict[str, Any]] = None
 
+class MediaAsset(BaseModel):
+    asset_id: str
+    asset_type: str # video, audio, image, document, stream
+    title: Optional[str] = None
+    url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    mime_type: Optional[str] = None
+
 class FormatOption(BaseModel):
     format_id: str
     file_type: str = "document" # document, image, video, audio, archive, binary
@@ -40,17 +77,27 @@ class FormatOption(BaseModel):
     codec: Optional[str] = None
     estimated_size_bytes: Optional[int] = None
     quality_label: str = "original"
-    provider_restrictions: Optional[List[str]] = None
+    download_url: Optional[str] = None
+    provider_restrictions: Optional[List[str]] = []
 
 class SourceInspectionResponse(BaseModel):
     source_id: str
     url: str
+    resolved_url: Optional[str] = None
+    source_type: SourceType = SourceType.DIRECT_FILE
     provider_id: str
     is_permitted: bool
-    capabilities: List[str]
+    security_status: SecurityStatus = SecurityStatus.SAFE
+    acquisition_permission: AcquisitionPermission = AcquisitionPermission.PERMITTED
+    source_access_status: SourceAccessStatus = SourceAccessStatus.ACCESSIBLE
+    capabilities: List[str] = []
     mime_type: Optional[str] = None
     estimated_size_bytes: Optional[int] = None
     inspection_status: str
+    title: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    assets: List[MediaAsset] = []
+    formats: List[FormatOption] = []
     errors: List[str] = []
 
 class PreflightRequest(BaseModel):

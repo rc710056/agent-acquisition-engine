@@ -154,11 +154,35 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
             <div className="flex items-center space-x-2">
               <span className={`w-2 h-2 rounded-full ${inspection.is_permitted ? 'bg-emerald-500' : 'bg-red-500'}`} />
               <span className="text-xs font-mono text-gray-300">SOURCE: {inspection.source_id}</span>
+              {inspection.source_type && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-electric-950/60 text-electric-400 border border-electric-800/50">
+                  {inspection.source_type}
+                </span>
+              )}
             </div>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium tracking-wide uppercase bg-amoled-hover text-gray-400 border border-amoled-border">
               {inspection.provider_id}
             </span>
           </div>
+
+          {/* Media Header / Thumbnail preview if present */}
+          {(inspection.title || inspection.thumbnail_url) && (
+            <div className="flex items-center space-x-3 p-3 rounded-lg bg-amoled-input/30 border border-amoled-border">
+              {inspection.thumbnail_url && (
+                <img
+                  src={inspection.thumbnail_url}
+                  alt="Source Thumbnail"
+                  className="w-16 h-16 rounded object-cover border border-amoled-border shrink-0"
+                />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-gray-100 truncate">{inspection.title || 'Discovered Media'}</p>
+                {inspection.resolved_url && (
+                  <p className="text-[11px] font-mono text-gray-400 truncate mt-0.5">{inspection.resolved_url}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
             <div className="p-3 rounded-lg bg-amoled-input/50 border border-amoled-border">
@@ -207,7 +231,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
                 >
                   {formats.map((f) => (
                     <option key={f.format_id} value={f.format_id}>
-                      {f.quality_label} ({f.mime_type})
+                      {f.quality_label} {f.resolution ? `[${f.resolution}]` : ''} ({f.mime_type})
                     </option>
                   ))}
                 </select>

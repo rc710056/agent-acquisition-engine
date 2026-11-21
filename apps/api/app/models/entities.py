@@ -55,10 +55,17 @@ class Source(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     url = Column(Text, nullable=False)
     canonical_url = Column(Text, nullable=True)
+    source_type = Column(String(50), default="DIRECT_FILE", nullable=False)
     provider_id = Column(String(50), nullable=False, index=True)
     content_type = Column(String(100), nullable=True)
     estimated_size_bytes = Column(BigInteger, nullable=True)
     is_permitted = Column(Boolean, default=True, nullable=False)
+    security_status = Column(String(50), default="safe", nullable=False)
+    acquisition_permission = Column(String(50), default="permitted", nullable=False)
+    source_access_status = Column(String(50), default="accessible", nullable=False)
+    title = Column(Text, nullable=True)
+    thumbnail_url = Column(Text, nullable=True)
+    assets_metadata = Column(JSON, nullable=True)
     inspection_status = Column(String(50), default="inspected", nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -77,6 +84,7 @@ class SourceOption(Base):
     codec = Column(String(50), nullable=True)
     estimated_size_bytes = Column(BigInteger, nullable=True)
     quality_label = Column(String(50), default="original", nullable=False)
+    download_url = Column(Text, nullable=True)
 
     source = relationship("Source", back_populates="options")
 
