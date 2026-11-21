@@ -67,11 +67,14 @@ For local desktop agents (Cursor, Claude Desktop, local shells):
 
 ---
 
-## The Standard 6-Step Agent Acquisition Workflow
+## The Standard Autonomous Acquisition Workflow
 
 Whenever a user requests a file, video, or data download, execute this precise pipeline:
 
 ```
+[0. search_sources] (if user provides title/topic instead of direct URL)
+        │
+        ▼
 [1. inspect_source] ──> [2. list_formats] ──> [3. preflight_acquisition]
                                                       │
                        ┌──────────────────────────────┴──────────────────────────────┐
@@ -85,6 +88,27 @@ Whenever a user requests a file, video, or data download, execute this precise p
                                                       ▼
                                               [7. get_artifact] (retrieve download_url & preview_url)
 ```
+
+### Step 0: Search & Intent Discovery (When no direct URL is provided)
+Call `search_sources` to resolve natural language queries, movie titles, open archives, or topics into actionable sources:
+
+**MCP Tool Call**:
+```json
+{
+  "name": "search_sources",
+  "arguments": {
+    "query": "Elephants Dream",
+    "kind": "video",
+    "max_results": 3
+  }
+}
+```
+
+**Key Return Fields**:
+- `candidates[]`: Array of candidate sources with `title`, `url`, `source_type`, `provider`, `thumbnail_url`, and `recommended_format_id`.
+- The candidate's `url` can be passed immediately to `inspect_source` or `start_acquisition`.
+
+---
 
 ### Step 1: Inspect Source
 Call `inspect_source` to resolve short links, check SSRF safety, determine the provider, and discover formats.

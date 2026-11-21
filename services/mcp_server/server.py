@@ -953,10 +953,104 @@ async def describe_capabilities(
             "signed_expiring_delivery_tokens",
             "multi_user_isolation",
             "autonomous_browser_sniffing",
-            "movie_intelligence_discovery"
+            "movie_intelligence_discovery",
+            "intent_discovery_and_search"
         ]
     }
     return make_success_envelope(data)
+
+# =====================================================================
+# MCP TOOL 10: search_sources
+# =====================================================================
+async def search_sources(
+    query: str,
+    kind: Optional[str] = None,
+    max_results: int = 5,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Searches for downloadable content, media streams, open films, archives, or datasets
+    matching a natural language query or title. Returns candidate sources ready for format
+    inspection or acquisition.
+    """
+    query = (query or "").strip()
+    if not query:
+        return make_error_envelope(
+            code="INVALID_ARGUMENT",
+            message="Search query cannot be empty.",
+            remediation="Provide a non-empty search query string."
+        )
+
+    candidates = []
+
+    # 1. Movie & Theatrical Intelligence search
+    if not kind or kind.lower() in {"movie", "video", "media", "film"}:
+        try:
+            from providers.movie_intelligence.provider import MovieIntelligenceProvider
+            movie_provider = MovieIntelligenceProvider()
+            meta = await movie_provider._resolve_movie_metadata(query)
+            if meta and meta.get("title"):
+                insp = await movie_provider.inspect(query)
+                candidates.append({
+                    "title": insp.title or meta.get("title"),
+                    "url": f"movie:{query}",
+                    "candidate_type": "movie_intelligence",
+                    "source_type": "MOVIE_INTEL",
+                    "provider": "movie_intelligence",
+                    "thumbnail_url": insp.thumbnail_url or meta.get("thumbnail_url"),
+                    "director": meta.get("director"),
+                    "year": meta.get("year"),
+                    "cast": meta.get("cast"),
+                    "synopsis": meta.get("synopsis"),
+                    "ott_platforms": meta.get("ott", []),
+                    "formats_count": len(insp.formats or []),
+                    "recommended_format_id": "best_video_audio",
+                    "relevance_score": 0.95
+                })
+        except Exception as e:
+            logger.debug(f"Movie intelligence search error: {e}")
+
+    # 2. Platform Media search (YouTube / open web via yt-dlp)
+    if not kind or kind.lower() in {"video", "audio", "media"}:
+        try:
+            import yt_dlp
+            limit = min(max_results, 5)
+            ydl_opts = {
+                "quiet": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "no_warnings": True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+                for entry in info.get("entries", []):
+                    entry_url = entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+                    entry_title = entry.get("title") or query
+                    dur = entry.get("duration")
+                    thumbnails = entry.get("thumbnails", [])
+                    thumb_url = thumbnails[-1].get("url") if thumbnails else None
+                    candidates.append({
+                        "title": entry_title,
+                        "url": entry_url,
+                        "candidate_type": "platform_media",
+                        "source_type": "PLATFORM_MEDIA_PAGE",
+                        "provider": "permitted_media",
+                        "thumbnail_url": thumb_url,
+                        "duration_seconds": float(dur) if dur else None,
+                        "uploader": entry.get("uploader") or entry.get("channel"),
+                        "recommended_format_id": "best_video_audio",
+                        "relevance_score": 0.85
+                    })
+        except Exception as e:
+            logger.debug(f"Platform media search error: {e}")
+
+    return make_success_envelope({
+        "query": query,
+        "kind": kind or "all",
+        "results_count": len(candidates),
+        "candidates": candidates
+    })
 
 @mcp.tool(
     name="inspect_source",
@@ -1043,6 +1137,18 @@ async def _mcp_get_user_dashboard_link(
 )
 async def _mcp_describe_capabilities(ctx: Context) -> Dict[str, Any]:
     return await describe_capabilities()
+
+@mcp.tool(
+    name="search_sources",
+    description="Searches for downloadable content, media streams, open films, archives, or datasets matching a natural language query or title. Returns candidate sources ready for format inspection or acquisition."
+)
+async def _mcp_search_sources(
+    query: str,
+    ctx: Context,
+    kind: Optional[str] = None,
+    max_results: int = 5
+) -> Dict[str, Any]:
+    return await search_sources(query=query, kind=kind, max_results=max_results)
 
 async def run_server():
     """Initializes tables and starts MCP server over stdio."""

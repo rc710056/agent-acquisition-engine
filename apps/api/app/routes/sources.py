@@ -1,8 +1,8 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
+from typing import List, Optional, Dict, Any
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import Source, SourceOption, User
@@ -125,6 +125,17 @@ async def inspect_source(
 
     inspection.source_id = source_id
     return inspection
+
+@router.get("/search")
+async def search_sources(
+    query: str = Query(..., min_length=1, description="Natural language title, keyword, or topic to search for"),
+    kind: Optional[str] = Query(None, description="Optional filter: 'movie', 'video', 'audio', 'document', 'archive'"),
+    limit: int = Query(5, ge=1, le=10, description="Maximum candidate results to return"),
+    user: User = Depends(require_permission("read"))
+):
+    from services.mcp_server.server import search_sources as mcp_search_sources
+    res = await mcp_search_sources(query=query, kind=kind, max_results=limit)
+    return res
 
 @router.get("/{source_id}/formats", response_model=List[FormatOption])
 async def list_formats(
