@@ -38,6 +38,17 @@ app.add_middleware(
 )
 
 # Health & Observability
+@app.get("/", tags=["Root"])
+async def root():
+    return {
+        "service": "Agent Acquisition Engine",
+        "status": "online",
+        "documentation": "/docs",
+        "openapi_schema": "/openapi.json",
+        "mcp_sse_endpoint": "/mcp/sse",
+        "web_console": "http://localhost:5173"
+    }
+
 @app.get("/health", tags=["Health"])
 @app.get("/api/v1/health", tags=["Health"])
 async def health_check():
