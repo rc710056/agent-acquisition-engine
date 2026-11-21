@@ -1,0 +1,157 @@
+import hashlib
+import zipfile
+import tarfile
+from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
+import filetype
+
+# Well-known magic byte signatures for common acquired file types
+MAGIC_SIGNATURES = {
+    "pdf": b"%PDF-",
+    "png": b"\x89PNG\r\n\x1a\n",
+    "jpeg": b"\xff\xd8\xff",
+    "jpg": b"\xff\xd8\xff",
+    "gif": b"GIF8",
+    "zip": b"PK\x03\x04",
+    "gzip": b"\x1f\x8b",
+    "gz": b"\x1f\x8b",
+    "tar": b"ustar", # typically at byte offset 257
+    "sqlite": b"SQLite format 3\x00",
+}
+
+class VerificationResult:
+    def __init__(
+        self,
+        is_valid: bool,
+        size_bytes: int,
+        sha256: str,
+        detected_mime: str,
+        errors: list[str] = None,
+        warnings: list[str] = None
+    ):
+        self.is_valid = is_valid
+        self.size_bytes = size_bytes
+        self.sha256 = sha256
+        self.detected_mime = detected_mime
+        self.errors = errors or []
+        self.warnings = warnings or []
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "is_valid": self.is_valid,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+            "detected_mime": self.detected_mime,
+            "errors": self.errors,
+            "warnings": self.warnings
+        }
+
+class FileVerifier:
+    """
+    Performs comprehensive multi-stage integrity and format verification
+    on acquired artifacts before completing an acquisition job.
+    """
+
+    @classmethod
+    def verify_file(
+        cls,
+        file_path: Path,
+        expected_size: Optional[int] = None,
+        expected_mime: Optional[str] = None,
+        expected_sha256: Optional[str] = None
+    ) -> VerificationResult:
+        errors: list[str] = []
+        warnings: list[str] = []
+
+        # 1. Existence check
+        if not file_path.exists() or not file_path.is_file():
+            return VerificationResult(
+                is_valid=False,
+                size_bytes=0,
+                sha256="",
+                detected_mime="unknown",
+                errors=["File does not exist on disk."]
+            )
+
+        # 2. Non-zero byte check
+        actual_size = file_path.stat().st_size
+        if actual_size == 0:
+            return VerificationResult(
+                is_valid=False,
+                size_bytes=0,
+                sha256="",
+                detected_mime="unknown",
+                errors=["File size is 0 bytes (empty transfer)."]
+            )
+
+        # 3. Expected size comparison
+        if expected_size is not None and expected_size > 0:
+            if actual_size != expected_size:
+                errors.append(f"Size mismatch: expected {expected_size} bytes, got {actual_size} bytes.")
+
+        # 4. Checksum calculation
+        sha256_hasher = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                while chunk := f.read(65536):
+                    sha256_hasher.update(chunk)
+            calculated_sha256 = sha256_hasher.hexdigest()
+        except Exception as e:
+            return VerificationResult(
+                is_valid=False,
+                size_bytes=actual_size,
+                sha256="",
+                detected_mime="unknown",
+                errors=[f"Failed to read file for hashing: {str(e)}"]
+            )
+
+        if expected_sha256 and calculated_sha256.lower() != expected_sha256.lower():
+            errors.append(f"Checksum mismatch: expected {expected_sha256}, got {calculated_sha256}.")
+
+        # 5. MIME and Magic byte inspection
+        detected_mime = "application/octet-stream"
+        kind = filetype.guess(str(file_path))
+        if kind:
+            detected_mime = kind.mime
+
+        # Read first 512 bytes for header signature verification
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(512)
+        except Exception as e:
+            header = b""
+            warnings.append(f"Could not read file header: {str(e)}")
+
+        ext = file_path.suffix.lower().lstrip(".")
+        if ext in MAGIC_SIGNATURES:
+            sig = MAGIC_SIGNATURES[ext]
+            if not header.startswith(sig):
+                # Special case for tar where signature is offset
+                if ext == "tar" and len(header) >= 262 and header[257:262] == b"ustar":
+                    pass
+                else:
+                    warnings.append(
+                        f"File header signature does not match expected pattern for .{ext} files."
+                    )
+
+        # 6. Archive integrity test
+        if ext == "zip":
+            try:
+                with zipfile.ZipFile(file_path, "r") as zf:
+                    bad_file = zf.testzip()
+                    if bad_file:
+                        errors.append(f"Corrupted zip entry found: {bad_file}")
+            except zipfile.BadZipFile:
+                errors.append("Invalid or corrupted ZIP archive.")
+            except Exception as e:
+                warnings.append(f"ZIP validation warning: {str(e)}")
+
+        is_valid = len(errors) == 0
+        return VerificationResult(
+            is_valid=is_valid,
+            size_bytes=actual_size,
+            sha256=calculated_sha256,
+            detected_mime=detected_mime,
+            errors=errors,
+            warnings=warnings
+        )

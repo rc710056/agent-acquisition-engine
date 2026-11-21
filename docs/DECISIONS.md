@@ -19,3 +19,9 @@
 - **Context**: External AI agents (Claude, Antigravity, OpenAI) need an official, uniform protocol.
 - **Decision**: Build an MCP-compliant server exposing 7 structured tools over Stdio and Streamable HTTP (SSE).
 - **Consequences**: Standard interoperability with modern agent runtimes.
+
+
+## ADR-005: Python Package Identifier Normalization
+- **Context**: The suggested repository structure named package directories with hyphens (e.g. `provider-contracts`, `shared-schemas`).
+- **Decision**: In Python, module and package names cannot contain hyphens because `-` is the subtraction operator in syntax. The directories were named `provider_contracts`, `shared_schemas`, `client_sdk`, `mcp_server`, and `acquisition_worker`.
+- **Consequences**: Standard Python imports (`from packages.shared_schemas.models import ...`) work natively without import hooks or workarounds.
