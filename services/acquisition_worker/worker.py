@@ -17,6 +17,7 @@ from apps.api.app.models.entities import (
     AcquisitionJob,
     JobEvent,
     Source,
+    SourceOption,
     Artifact,
     UsageRecord
 )
@@ -132,6 +133,8 @@ class AcquisitionWorker:
         return True
 
     async def _execute_acquisition(self, job_id: str, source_id: str, user_id: str, format_id: str) -> None:
+        opt_file_type: Optional[str] = None
+        opt_mime: Optional[str] = None
         async with async_session_factory() as session:
             stmt = select(Source).where(Source.id == source_id)
             res = await session.execute(stmt)
@@ -141,6 +144,16 @@ class AcquisitionWorker:
                 return
             target_url = source.canonical_url or source.url
             provider_id = source.provider_id
+
+            stmt_opt = select(SourceOption).where(
+                SourceOption.source_id == source_id,
+                SourceOption.format_id == format_id
+            )
+            opt_res = await session.execute(stmt_opt)
+            target_opt = opt_res.scalar_one_or_none()
+            if target_opt:
+                opt_file_type = target_opt.file_type
+                opt_mime = target_opt.mime_type
 
         # 0. Check deduplication cache for existing verified artifact
         cache_key = hashlib.sha256(f"{target_url}::{format_id}".encode()).hexdigest()
@@ -256,7 +269,9 @@ class AcquisitionWorker:
             verification = provider.verify(
                 temp_destination,
                 expected_size=acquire_result.get("total_bytes"),
-                expected_sha256=acquire_result.get("sha256")
+                expected_sha256=acquire_result.get("sha256"),
+                expected_mime=acquire_result.get("mime_type") or opt_mime,
+                expected_file_type=opt_file_type
             )
 
             if not verification.is_valid:

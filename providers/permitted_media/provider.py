@@ -359,9 +359,9 @@ class PermittedMediaProvider(BaseProviderContract):
                 m_h = re.search(r'best_(\d+)p', format_id)
                 if m_h:
                     h = m_h.group(1)
-                    fmt_spec = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
+                    fmt_spec = f"bestvideo[height<={h}]+bestaudio/best[height<={h}][vcodec!=none]/best[vcodec!=none]"
                 else:
-                    fmt_spec = "bestvideo+bestaudio/best"
+                    fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]/bestvideo"
                 ext = "mp4"
 
             temp_stem = f"ytdl_{uuid.uuid4().hex[:8]}"
@@ -403,6 +403,21 @@ class PermittedMediaProvider(BaseProviderContract):
                 if destination_path.exists():
                     destination_path.unlink()
                 actual_temp_file.rename(destination_path)
+
+                # Ensure video acquisition actually produced a video stream
+                if target_format.file_type == "video":
+                    import shutil, subprocess
+                    ffprobe_bin = shutil.which("ffprobe")
+                    if ffprobe_bin:
+                        probe = subprocess.run(
+                            [ffprobe_bin, "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(destination_path)],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        if probe.returncode == 0 and not probe.stdout.strip():
+                            destination_path.unlink(missing_ok=True)
+                            raise RuntimeError(f"Media extraction produced audio-only stream for requested video format '{format_id}'.")
             except Exception as ytdl_err:
                 # Anti-bot resilience: Fallback to Cobalt adapter if applicable
                 from providers.cobalt.provider import CobaltProvider
@@ -493,11 +508,14 @@ class PermittedMediaProvider(BaseProviderContract):
         file_path: Path,
         expected_size: Optional[int] = None,
         expected_mime: Optional[str] = None,
-        expected_sha256: Optional[str] = None
+        expected_sha256: Optional[str] = None,
+        expected_file_type: Optional[str] = None,
+        **kwargs
     ) -> VerificationResult:
         return FileVerifier.verify_file(
             file_path,
             expected_size=expected_size,
             expected_mime=expected_mime,
-            expected_sha256=expected_sha256
+            expected_sha256=expected_sha256,
+            expected_file_type=expected_file_type
         )

@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.config import settings
@@ -36,6 +36,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def capture_public_host_middleware(request: Request, call_next):
+    from apps.api.app import config
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if fwd_host:
+        clean_host = fwd_host.split(",")[0].strip()
+        if not clean_host.startswith("localhost") and not clean_host.startswith("127.0.0.1"):
+            proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+            config.PUBLIC_BASE_URL = f"{proto}://{clean_host}"
+    return await call_next(request)
 
 # Health & Observability
 @app.get("/", tags=["Root"])

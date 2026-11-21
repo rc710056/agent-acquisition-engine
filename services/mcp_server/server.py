@@ -752,6 +752,7 @@ async def get_artifact(
             "sha256": art.sha256,
             "is_verified": art.is_verified,
             "download_url": dl_url,
+            "preview_url": dl_url,
             "expires_at": expires_at.isoformat()
         }
 

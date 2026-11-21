@@ -58,7 +58,8 @@ class FileVerifier:
         file_path: Path,
         expected_size: Optional[int] = None,
         expected_mime: Optional[str] = None,
-        expected_sha256: Optional[str] = None
+        expected_sha256: Optional[str] = None,
+        expected_file_type: Optional[str] = None
     ) -> VerificationResult:
         errors: list[str] = []
         warnings: list[str] = []
@@ -145,6 +146,33 @@ class FileVerifier:
                 errors.append("Invalid or corrupted ZIP archive.")
             except Exception as e:
                 warnings.append(f"ZIP validation warning: {str(e)}")
+
+        # 7. Video stream presence check
+        is_video_expected = expected_file_type == "video" or (expected_mime and expected_mime.startswith("video/"))
+        if is_video_expected:
+            if detected_mime.startswith("audio/"):
+                errors.append(f"MIME conflict: Expected video format ({expected_mime or 'video'}), but file is an audio stream ({detected_mime}).")
+            if ext in {"m4a", "mp3", "aac", "wav", "flac", "ogg", "opus"}:
+                errors.append(f"Extension conflict: .{ext} is an audio format, but video stream was expected.")
+
+            import shutil
+            import subprocess
+            ffprobe_bin = shutil.which("ffprobe")
+            if ffprobe_bin:
+                try:
+                    probe = subprocess.run(
+                        [ffprobe_bin, "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if probe.returncode == 0:
+                        if not probe.stdout.strip():
+                            errors.append("Integrity verification failed: Artifact contains 0 video streams (audio-only).")
+                    else:
+                        errors.append(f"Integrity verification failed: Could not detect valid video stream in file.")
+                except Exception as probe_err:
+                    warnings.append(f"ffprobe video stream check warning: {str(probe_err)}")
 
         is_valid = len(errors) == 0
         return VerificationResult(

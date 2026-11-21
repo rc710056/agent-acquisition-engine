@@ -68,7 +68,9 @@ class BaseProviderContract(ABC):
         file_path: Path,
         expected_size: Optional[int] = None,
         expected_mime: Optional[str] = None,
-        expected_sha256: Optional[str] = None
+        expected_sha256: Optional[str] = None,
+        expected_file_type: Optional[str] = None,
+        **kwargs
     ) -> VerificationResult:
         """Runs integrity and format validation on acquired file."""
         pass

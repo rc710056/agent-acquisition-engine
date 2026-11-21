@@ -81,3 +81,21 @@ def test_storage_service_workflow():
 
         # Traversal attempt must fail
         assert storage.get_artifact_path("../../../etc/passwd") is None
+
+def test_file_verifier_audio_disguised_as_video():
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as f:
+        # Write dummy audio payload
+        f.write(b"AUDIO_ONLY_PAYLOAD_HERE" * 100)
+        temp_path = Path(f.name)
+
+    try:
+        # If video was expected, audio-only must fail verification
+        res = FileVerifier.verify_file(
+            temp_path,
+            expected_mime="video/mp4",
+            expected_file_type="video"
+        )
+        assert res.is_valid is False
+        assert any("video" in err.lower() for err in res.errors)
+    finally:
+        temp_path.unlink()

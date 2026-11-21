@@ -309,11 +309,14 @@ class TorrentProvider(BaseProviderContract):
         file_path: Path,
         expected_size: Optional[int] = None,
         expected_mime: Optional[str] = None,
-        expected_sha256: Optional[str] = None
+        expected_sha256: Optional[str] = None,
+        expected_file_type: Optional[str] = None,
+        **kwargs
     ) -> VerificationResult:
         return FileVerifier.verify_file(
             file_path,
             expected_size=expected_size,
             expected_mime=expected_mime,
-            expected_sha256=expected_sha256
+            expected_sha256=expected_sha256,
+            expected_file_type=expected_file_type
         )

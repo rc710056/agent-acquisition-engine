@@ -6,22 +6,44 @@ description: Use when downloading, inspecting, or acquiring external web media, 
 # Agent Acquisition Engine (AAE) - Operational Skill
 
 ## Overview
-The **Agent Acquisition Engine (AAE)** is an enterprise-grade MCP-first gateway for automated, secure, and resilient content acquisition. It prevents common agent failure modes (such as downloading HTML login gates instead of video streams, downloading audio-less video tracks, or crashing on JavaScript-rendered blobs and magnet links).
+The **Agent Acquisition Engine (AAE)** is an enterprise-grade MCP-first gateway for automated, secure, and resilient content acquisition. It provides autonomous AI agents with verified download capabilities, anti-bot bypass, stream muxing, and cryptographic validation without guessing formats or downloading broken HTML login gates.
 
 ### Core Capabilities
-- **Stream Platforms**: YouTube, Pinterest, Vimeo, Dailymotion, Reddit video (automatic video+audio muxing via `ffmpeg`).
+- **Stream Platforms**: YouTube, Vimeo, Pinterest, Dailymotion, Reddit (automatic synchronized video+audio muxing via `ffmpeg`).
 - **Galleries & Carousels**: Pinterest boards, Imgur, Reddit albums, DeviantArt, Flickr (packaged into clean `.zip` archives).
-- **Direct Binaries & Large Files**: 4-way concurrent HTTP Range chunked downloader with resume support.
+- **Direct Documents & Binaries**: PDF, TXT, Markdown, CSV, JSON, ZIP, TAR, DMG, ISO (4-way concurrent HTTP Range chunked downloader with resume support).
 - **P2P & Torrents**: Native inspection and acquisition of `magnet:?xt=urn:btih:...` and `.torrent` files with tracker SSRF firewalling.
 - **Dynamic JavaScript Media**: Headless Chromium network sniffer capturing live `.m3u8` (HLS) and `.mpd` (DASH) streams.
-- **Content Deduplication Cache**: Sub-10ms instant returns for previously verified files.
+- **Deduplication Vault**: Sub-10ms instant cache fulfillment for previously verified files.
+- **Integrity Guarantee**: Post-download stream-presence verification via `ffprobe` ensuring video formats never degrade to audio-only.
 
 ---
 
 ## Connection & Transports
 
-### 1. Model Context Protocol (MCP) - Stdio
-Add to your agent configuration (Claude Desktop, Cursor, Goose, Cline):
+### 1. Remote MCP Transport (Server-Sent Events) - Cloud Agents & Sandboxes
+For external agent platforms (such as **Base44**, Claude Desktop, remote Sandboxes, Goose):
+- **Public MCP SSE Endpoint**: `https://difficulties-roses-cement-loud.trycloudflare.com/mcp/sse`
+- **Authentication**: Bearer Token in `Authorization` header
+- **Platform Secret Name**: `AAE_API_KEY`
+- **Active Token**: `aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702`
+
+MCP Client Configuration:
+```json
+{
+  "mcpServers": {
+    "agent-acquisition-engine": {
+      "url": "https://difficulties-roses-cement-loud.trycloudflare.com/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702"
+      }
+    }
+  }
+}
+```
+
+### 2. Local MCP Transport (Stdio)
+For local desktop agents (Cursor, Claude Desktop, local shells):
 ```json
 {
   "mcpServers": {
@@ -29,6 +51,7 @@ Add to your agent configuration (Claude Desktop, Cursor, Goose, Cline):
       "command": "C:\\Users\\ROHIT\\.gemini\\antigravity\\scratch\\agent-acquisition-engine\\.venv\\Scripts\\python.exe",
       "args": ["-m", "services.mcp_server.server"],
       "env": {
+        "API_BASE_URL": "http://127.0.0.1:8000",
         "DATABASE_URL": "sqlite+aiosqlite:///storage/aae.db",
         "STORAGE_BASE_PATH": "storage/artifacts"
       }
@@ -37,20 +60,31 @@ Add to your agent configuration (Claude Desktop, Cursor, Goose, Cline):
 }
 ```
 
-### 2. Remote MCP Transport (Server-Sent Events)
-Connect to the running FastAPI gateway:
-- **SSE Endpoint**: `http://127.0.0.1:8000/mcp/sse`
-- **Messages Endpoint**: `http://127.0.0.1:8000/mcp/messages`
-
 ### 3. Direct REST API
-- **API Base**: `http://127.0.0.1:8000/api/v1`
-- **Interactive OpenAPI Docs**: `http://127.0.0.1:8000/docs`
+- **Base URL**: `https://difficulties-roses-cement-loud.trycloudflare.com/api/v1` (or `http://127.0.0.1:8000/api/v1` locally)
+- **Interactive OpenAPI Documentation**: `/docs`
+- **Health Endpoint**: `/health`
 
 ---
 
-## The Standard 5-Step Agent Acquisition Workflow
+## The Standard 6-Step Agent Acquisition Workflow
 
 Whenever a user requests a file, video, or data download, execute this precise pipeline:
+
+```
+[1. inspect_source] ──> [2. list_formats] ──> [3. preflight_acquisition]
+                                                      │
+                       ┌──────────────────────────────┴──────────────────────────────┐
+                       ▼ (if requires_approval)                                      ▼ (if can_acquire)
+            [4. request_approval]                                         [5. start_acquisition]
+                       │                                                             │
+                       └──────────────────────────────┬──────────────────────────────┘
+                                                      ▼
+                                              [6. get_job_status] (poll until completed)
+                                                      │
+                                                      ▼
+                                              [7. get_artifact] (retrieve download_url & preview_url)
+```
 
 ### Step 1: Inspect Source
 Call `inspect_source` to resolve short links, check SSRF safety, determine the provider, and discover formats.
@@ -60,36 +94,59 @@ Call `inspect_source` to resolve short links, check SSRF safety, determine the p
 {
   "name": "inspect_source",
   "arguments": {
-    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
   }
 }
 ```
 
 **Key Return Fields**:
 - `source_id`: UUID of the registered source.
-- `recommended_format_id`: Default best format (`best_video_audio`, `all_files`, `original`).
-- `capabilities`: Available engine capabilities (`media_extraction`, `chunked_download`, `p2p_torrent`, etc.).
+- `source_type`: `PLATFORM_MEDIA_PAGE`, `DIRECT_FILE`, `TORRENT`, `MEDIA_COLLECTION`, etc.
+- `provider`: Active driver (`permitted_media`, `direct_http`, `torrent`, `pinterest`, etc.).
+- `is_permitted`: `true` if passed firewall safety check.
+- `recommended_format_id`: Default best format (`best_video_audio`, `original`, `all_files`).
 
 ---
 
-### Step 2: Select Format with Audio Guarantee
-**CRITICAL RULE**: Never select raw video streams (e.g. `249`, `137`) that lack audio unless the user explicitly requested a mute video.
+### Step 2: List Formats & Multi-Option Presentation
+Call `list_formats` to inspect all available streams, resolutions, and options.
 
-Use these standardized format IDs:
-| User Intent | Format ID | Behavior |
-| :--- | :--- | :--- |
-| **Highest Quality Video** | `best_video_audio` | Merges best video + best audio into `.mp4` |
-| **Full HD 1080p** | `best_1080p_mp4` | 1080p video muxed with high-bitrate audio |
-| **Standard 720p** | `best_720p_mp4` | 720p video muxed with audio |
-| **Audio Only (Music/Podcast)**| `best_audio_mp3` or `best_audio_m4a` | Clean audio track extraction |
-| **Torrent / Archive** | `all_files` | Full package archive with manifest |
-| **Direct File** | `original` | High-speed concurrent chunked download |
+**MCP Tool Call**:
+```json
+{
+  "name": "list_formats",
+  "arguments": {
+    "source_id": "<source_id_from_step_1>"
+  }
+}
+```
 
-Call `list_formats(source_id)` if you need to browse all specific resolutions and file sizes.
+**Format Categorization & Selection Rules**:
+1. **⭐ Recommended Video + Audio (Guaranteed Synced Streams)**:
+   - `best_video_audio`: Best available resolution (e.g. 1080p/4K) muxed with highest quality audio.
+   - `best_1080p_mp4`, `best_720p_mp4`, `best_360p_mp4`: Fixed resolution with audio.
+   - *CRITICAL AGENT RULE*: For any video request, **ALWAYS** select a format with `has_video: true` AND `has_audio: true`.
+2. **🎧 Pure Audio**:
+   - `best_audio_m4a` (AAC) or `best_audio_mp3` (320k): Clean standalone audio extraction.
+3. **📦 Packages & Direct Files**:
+   - `original`: Direct document or binary.
+   - `all_files`: Torrent or gallery archive.
+
+**How to Present Options to the User**:
+When presenting choices to the user, format them in a markdown table:
+```markdown
+| Option | Resolution | Codec | Stream Type | Format ID |
+| :--- | :--- | :--- | :--- | :--- |
+| **★ Best Quality (Recommended)** | 1080p | h264/aac | Video + Audio | `best_video_audio` |
+| **Standard 720p** | 720p | h264/aac | Video + Audio | `best_720p_mp4` |
+| **Compact 360p** | 360p | h264/aac | Video + Audio | `best_360p_mp4` |
+| **High-Quality Audio** | - | aac | Audio Only | `best_audio_m4a` |
+| **Standard MP3** | - | mp3 | Audio Only | `best_audio_mp3` |
+```
 
 ---
 
-### Step 3: Preflight Safety & Approval Check
+### Step 3: Preflight Safety & Quota Check
 Call `preflight_acquisition` before launching.
 
 **MCP Tool Call**:
@@ -97,94 +154,120 @@ Call `preflight_acquisition` before launching.
 {
   "name": "preflight_acquisition",
   "arguments": {
-    "source_id": "src_12345",
+    "source_id": "<source_id>",
     "format_id": "best_video_audio"
   }
 }
 ```
 
 **Evaluating Response**:
-- If `is_cached: true`: The artifact is already downloaded and verified on disk! You can immediately retrieve it.
-- If `requires_approval: true`: The file exceeds the safety threshold (e.g. >50 MB) or requires manual operator sign-off.
-  - Inform the user: *"This download is estimated at X MB and requires operator confirmation in the Approvals tab at http://localhost:5173/approvals."*
-  - Do not proceed until approved.
+- `is_cached: true`: File is already downloaded and verified in storage! Proceed directly to Step 7.
+- `can_acquire: true` and `requires_approval: false`: Ready for immediate acquisition. Proceed to Step 5.
+- `requires_approval: true`: File exceeds safety threshold (>50 MB). Request approval in Step 4.
 
 ---
 
-### Step 4: Dispatch & Monitor Acquisition
-Launch the background job and poll until complete.
+### Step 4: Request Approval (If Required)
+If `requires_approval: true`, call `request_approval`:
+
+**MCP Tool Call**:
+```json
+{
+  "name": "request_approval",
+  "arguments": {
+    "source_id": "<source_id>",
+    "format_id": "best_video_audio",
+    "reason": "Acquiring 1080p media asset requested by user"
+  }
+}
+```
+Obtain `approval_id`, and present confirmation to the operator.
+
+---
+
+### Step 5: Start Background Acquisition
+Dispatch the acquisition job to the background worker.
 
 **MCP Tool Call**:
 ```json
 {
   "name": "start_acquisition",
   "arguments": {
-    "source_id": "src_12345",
-    "format_id": "best_video_audio"
+    "source_id": "<source_id>",
+    "format_id": "best_video_audio",
+    "approval_id": "<approval_id_if_required>"
   }
 }
 ```
-
-**Monitor Status**:
-Call `get_acquisition_status(job_id)` every 2 seconds:
-- `state == "completed"`: Acquisition finished and magic-byte verified. Contains `artifact_id`.
-- `state == "downloading"`: Check `progress_percent` and `bytes_transferred`.
-- `state == "failed"`: Check `error_message` for diagnosis.
+Returns `job_id` and initial state (`queued` or `downloading`).
 
 ---
 
-### Step 5: Deliver Verified Artifact
-Once completed, call `download_artifact(artifact_id)`.
+### Step 6: Monitor Job Progress
+Poll `get_job_status` every 1.5–2.0 seconds until completed.
 
 **MCP Tool Call**:
 ```json
 {
-  "name": "download_artifact",
+  "name": "get_job_status",
   "arguments": {
-    "artifact_id": "art_12345"
+    "job_id": "<job_id>"
   }
 }
 ```
 
-**Returns**:
-- `local_path`: Absolute path to verified file on disk (e.g. `C:\Users\ROHIT\...`).
-- `delivery_url`: Signed HTTP download link with HMAC security token.
-- `sha256`: Cryptographic hash verifying file integrity.
-- `mime_type`: Magic-byte verified MIME type.
-
-Present the file path and summary clearly to the user.
+**Status States**:
+- `downloading`: Inspect `progress_percent` (0-100%) and `bytes_transferred`.
+- `verifying`: Download finished; engine is running cryptographic SHA-256 and `ffprobe` stream validation.
+- `completed`: Verification succeeded. Contains `artifact_id`.
+- `failed`: Check `error_message` for details.
 
 ---
 
-## Autonomous Decision Matrix
+### Step 7: Retrieve Verified Download & Preview Link
+Call `get_artifact` to obtain the verified artifact details and public download URL.
 
+**MCP Tool Call**:
+```json
+{
+  "name": "get_artifact",
+  "arguments": {
+    "artifact_id": "<artifact_id>"
+  }
+}
 ```
-User Prompt: "Download https://pin.it/zRhGMggGP"
-  ↳ Agent calls inspect_source("https://pin.it/zRhGMggGP")
-  ↳ Engine resolves short link -> detects Pinterest video
-  ↳ Agent selects format_id="best_video_audio"
-  ↳ Agent checks preflight -> dispatches job -> verifies -> presents .mp4 file
 
-User Prompt: "Grab this dataset magnet:?xt=urn:btih:3b245504..."
-  ↳ Agent calls inspect_source(magnet_url)
-  ↳ Engine verifies tracker SSRF safety -> extracts torrent metadata
-  ↳ Agent selects format_id="all_files"
-  ↳ Engine downloads package -> verifies SHA-256 -> delivers .zip artifact
-
-User Prompt: "Download large archive https://example.com/data.tar.gz"
-  ↳ Agent calls inspect_source(url)
-  ↳ Engine identifies DIRECT_FILE with Accept-Ranges
-  ↳ Engine activates 4-way concurrent chunked downloader
-  ↳ Downloads 4x faster with byte-level resumption -> delivers verified .tar.gz
+**Response**:
+```json
+{
+  "artifact_id": "art_c83fc6f8",
+  "filename": "bieber_360p.mp4",
+  "mime_type": "video/mp4",
+  "size_bytes": 12110272,
+  "sha256": "792f8a221b2c4e5f...",
+  "is_verified": true,
+  "download_url": "https://difficulties-roses-cement-loud.trycloudflare.com/api/v1/delivery/download?token=...",
+  "preview_url": "https://difficulties-roses-cement-loud.trycloudflare.com/api/v1/delivery/download?token=...",
+  "expires_at": "2026-11-21T21:45:00Z"
+}
 ```
+
+**Presenting Result to User**:
+Always share:
+1. File Name and Size (e.g. `12.11 MB`)
+2. Format & Streams (e.g. `H.264 video (640x360) + AAC audio`)
+3. Cryptographic SHA-256 Checksum
+4. Direct Expiring Download Link: `[Download bieber_360p.mp4](download_url)`
 
 ---
 
-## Error Handling & Troubleshooting
+## Error Handling & Edge Case Solutions
 
-| Error Code / Symptom | Root Cause | Agent Action |
+| Error / Symptom | Root Cause | Engine Behavior & Agent Action |
 | :--- | :--- | :--- |
-| `SSRF Policy Violation` | URL targets private network or cloud metadata | Refuse target; inform user private IPs are forbidden. |
-| `Approval Required` | File exceeds policy threshold (>50MB) | Instruct user to approve at `http://localhost:5173/approvals`. |
-| `Anti-Bot / Challenge` | Platform rate limits unauthenticated requests | PermittedMediaProvider will automatically fallback to Cobalt or Browser Sniffer. |
-| `Invalid State Transition` | Job was already completed from cache | Use cached `artifact_id` directly; skip download step. |
+| `Unrecognized content type: text/plain` | Direct markdown or plain text file | Engine handles via `direct_http` provider. Select format `original`. |
+| `Audio-only artifact for video format` | yt-dlp fallback `/best` matched audio | Engine enforces `[vcodec!=none]` and `ffprobe` video stream verification. |
+| `Failed to download file` in remote sandbox | Download URL contained `127.0.0.1` | Engine dynamically emits public tunnel host (`https://...trycloudflare.com`). |
+| `SSRF Policy Violation` | URL points to RFC-1918 or cloud metadata IP | Immediate block. Agent informs user target is forbidden. |
+| `Approval Required` | Resource size exceeds threshold (>50 MB) | Call `request_approval` and obtain operator confirmation. |
+| `Anti-Bot / Challenge` | Platform blocks automated scraper | Engine automatically falls back to Cobalt or Headless Chromium Sniffer. |

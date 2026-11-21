@@ -76,6 +76,7 @@ async def get_artifact(
         expires_at=exp_time
     )
 
+@router.head("/delivery/download")
 @router.get("/delivery/download")
 async def download_artifact_delivery(token: str = Query(..., description="Cryptographically signed expiring token"), db: AsyncSession = Depends(get_db)):
     """

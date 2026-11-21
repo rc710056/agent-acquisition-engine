@@ -82,7 +82,14 @@ class StorageService:
         """
         ttl = ttl_seconds or settings.EXPIRING_URL_TTL_SECONDS
         token = generate_signed_delivery_token(artifact_id, settings.SECRET_KEY, ttl_seconds=ttl)
-        api_base = (base_url or settings.API_BASE_URL).rstrip("/")
+        import os
+        from apps.api.app import config
+        api_base = (
+            base_url
+            or os.environ.get("API_BASE_URL")
+            or config.PUBLIC_BASE_URL
+            or settings.API_BASE_URL
+        ).rstrip("/")
         download_url = f"{api_base}/api/v1/delivery/download?token={token}"
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         return download_url, expires_at
