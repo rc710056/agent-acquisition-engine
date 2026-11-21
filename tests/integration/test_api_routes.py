@@ -36,3 +36,59 @@ async def test_api_providers_list():
         providers = resp.json()
         assert len(providers) >= 1
         assert any(p["provider_id"] == "direct_http" for p in providers)
+
+@pytest.mark.asyncio
+async def test_api_acquisitions_unknown_size_requires_approval():
+    await init_db()
+    import uuid
+    from apps.api.app.models.database import async_session_factory
+    from apps.api.app.models.entities import Source, SourceOption, User
+
+    uid = uuid.uuid4().hex[:8]
+    test_token = f"aae_usr_{uid}"
+    async with async_session_factory() as session:
+        user = User(
+            email=f"api_test_{uid}@engine.io",
+            hashed_password="pw",
+            role="user",
+            portal_token=test_token
+        )
+        session.add(user)
+        src = Source(
+            url=f"https://example.com/unknown_media_{uid}.mp4",
+            provider_id="direct_http",
+            content_type="video/mp4",
+            estimated_size_bytes=None,
+            is_permitted=True
+        )
+        session.add(src)
+        await session.flush()
+
+        opt = SourceOption(
+            source_id=src.id,
+            format_id="original",
+            file_type="video",
+            mime_type="video/mp4",
+            estimated_size_bytes=None,
+            quality_label="original"
+        )
+        session.add(opt)
+        await session.commit()
+        src_id = src.id
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        headers = {"Authorization": f"Bearer {test_token}"}
+        # Attempt to create acquisition job without approval_id
+        resp = await client.post(
+            "/api/v1/acquisitions/jobs",
+            headers=headers,
+            json={
+                "source_id": src_id,
+                "format_id": "original",
+                "auto_approve": False
+            }
+        )
+        assert resp.status_code == 403
+        data = resp.json()
+        assert "operator approval is required" in data["detail"].lower()
+

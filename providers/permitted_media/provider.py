@@ -37,6 +37,30 @@ def get_friendly_resolution_name(height: int) -> str:
         return f"Standard ({height}p)"
     return f"{height}p"
 
+def estimate_stream_bytes(
+    raw_format: Optional[dict] = None,
+    duration_seconds: Optional[float] = None,
+    default_kbps: int = 1500
+) -> Optional[int]:
+    """Estimate size in bytes from yt-dlp format dict or duration * bitrate."""
+    if raw_format:
+        filesize = raw_format.get("filesize")
+        if filesize and isinstance(filesize, (int, float)) and filesize > 0:
+            return int(filesize)
+        filesize_approx = raw_format.get("filesize_approx")
+        if filesize_approx and isinstance(filesize_approx, (int, float)) and filesize_approx > 0:
+            return int(filesize_approx)
+        tbr = raw_format.get("tbr") or (
+            (raw_format.get("vbr") or 0) + (raw_format.get("abr") or 0)
+        )
+        if tbr and tbr > 0 and duration_seconds and duration_seconds > 0:
+            return int((tbr * 1000 / 8) * duration_seconds)
+
+    if duration_seconds and duration_seconds > 0 and default_kbps > 0:
+        return int((default_kbps * 1000 / 8) * duration_seconds)
+
+    return None
+
 class PermittedMediaProvider(BaseProviderContract):
     """
     Acquisition provider for authorized media platforms (YouTube, Vimeo, Reddit, etc.)
@@ -115,11 +139,27 @@ class PermittedMediaProvider(BaseProviderContract):
                     has_video = any(f.get("vcodec") and f.get("vcodec") != "none" for f in raw_formats)
                     has_audio = any(f.get("acodec") and f.get("acodec") != "none" for f in raw_formats)
                     video_formats = [f for f in raw_formats if f.get("vcodec") != "none"]
+                    audio_formats = [f for f in raw_formats if f.get("acodec") and f.get("acodec") != "none"]
+
+                    dur_sec = float(duration) if duration else None
+                    best_audio_fmt = next(iter(sorted(audio_formats, key=lambda x: x.get("abr") or x.get("tbr") or 0, reverse=True)), None)
+                    best_audio_bytes = estimate_stream_bytes(best_audio_fmt, dur_sec, default_kbps=128)
 
                     if has_video:
                         # Find unique heights in descending order
                         heights = sorted(list(set(f.get("height") for f in video_formats if f.get("height"))), reverse=True)
                         max_h = heights[0] if heights else 1080
+
+                        def get_h_estimated_bytes(h_val: int) -> Optional[int]:
+                            h_fmts = [f for f in video_formats if f.get("height") == h_val]
+                            best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: x.get("tbr") or x.get("vbr") or 0, reverse=True)), None)
+                            default_v = 4500 if h_val >= 1080 else (2500 if h_val >= 720 else (1200 if h_val >= 480 else 650))
+                            v_bytes = estimate_stream_bytes(best_h_fmt, dur_sec, default_kbps=default_v)
+                            if v_bytes or best_audio_bytes:
+                                return (v_bytes or 0) + (best_audio_bytes or 0)
+                            return None
+
+                        max_h_size = get_h_estimated_bytes(max_h)
 
                         # 1. BEST QUALITY COMPOSITE (VIDEO + AUDIO) - MUST BE FIRST!
                         formats.append(FormatOption(
@@ -128,7 +168,7 @@ class PermittedMediaProvider(BaseProviderContract):
                             mime_type="video/mp4",
                             resolution=f"{max_h}p",
                             codec="h264/aac",
-                            estimated_size_bytes=None,
+                            estimated_size_bytes=max_h_size,
                             quality_label=f"★ Best Quality ({get_friendly_resolution_name(max_h)}) • with Audio",
                             has_audio=True,
                             has_video=True,
@@ -143,7 +183,7 @@ class PermittedMediaProvider(BaseProviderContract):
                                 mime_type="video/mp4",
                                 resolution=f"{h}p",
                                 codec="h264/aac",
-                                estimated_size_bytes=None,
+                                estimated_size_bytes=get_h_estimated_bytes(h),
                                 quality_label=f"{get_friendly_resolution_name(h)} • with Audio",
                                 has_audio=True,
                                 has_video=True,
@@ -158,19 +198,20 @@ class PermittedMediaProvider(BaseProviderContract):
                             mime_type="audio/mp4",
                             resolution=None,
                             codec="aac",
-                            estimated_size_bytes=None,
+                            estimated_size_bytes=best_audio_bytes,
                             quality_label="Best Quality Audio (M4A / AAC)",
                             has_audio=True,
                             has_video=False,
                             category="audio_only"
                         ))
+                        mp3_bytes = estimate_stream_bytes(None, dur_sec, default_kbps=320) or best_audio_bytes
                         formats.append(FormatOption(
                             format_id="best_audio_mp3",
                             file_type="audio",
                             mime_type="audio/mpeg",
                             resolution=None,
                             codec="mp3",
-                            estimated_size_bytes=None,
+                            estimated_size_bytes=mp3_bytes,
                             quality_label="Standard Audio (MP3 320k)",
                             has_audio=True,
                             has_video=False,

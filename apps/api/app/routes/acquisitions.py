@@ -141,7 +141,7 @@ async def create_job(
             detail=f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
         )
 
-    needs_approval = (opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800)
+    needs_approval = (opt.estimated_size_bytes is None or opt.estimated_size_bytes > 52_428_800)
     if needs_approval and not req.approval_id:
         if req.auto_approve:
             now = datetime.now(timezone.utc)

@@ -196,6 +196,45 @@ async def _resolve_user_from_credentials(
         return user, None
     return None, "Authentication is required. Configure a bearer token for the MCP server."
 
+def make_error_envelope(
+    code: str,
+    message: str,
+    retryable: bool = False,
+    remediation: str = "",
+    details: Optional[Dict[str, Any]] = None,
+    extra: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    res: Dict[str, Any] = {
+        "ok": False,
+        "error": message,
+        "error_code": code,
+        "error_envelope": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "remediation": remediation,
+            "details": details or {}
+        },
+        "meta": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "engine_version": "0.2.0"
+        }
+    }
+    if extra:
+        res.update(extra)
+    return res
+
+def make_success_envelope(data: Dict[str, Any]) -> Dict[str, Any]:
+    res = dict(data)
+    res["ok"] = True
+    res["data"] = dict(data)
+    res["error"] = None
+    res["meta"] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "engine_version": "0.2.0"
+    }
+    return res
+
 # =====================================================================
 # MCP TOOL 1: inspect_source
 # =====================================================================
@@ -211,34 +250,42 @@ async def inspect_source(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {
-                "source_id": f"src_auth_err_{url[:8]}",
-                "url": url,
-                "is_permitted": False,
-                "security_status": "blocked",
-                "inspection_status": "failed",
-                "errors": [auth_err]
-            }
+            return make_error_envelope(
+                code="AUTH_REQUIRED",
+                message=auth_err,
+                extra={
+                    "source_id": f"src_auth_err_{url[:8]}",
+                    "url": url,
+                    "is_permitted": False,
+                    "security_status": "blocked",
+                    "inspection_status": "failed",
+                    "errors": [auth_err]
+                }
+            )
 
     provider, classification = await provider_registry.resolve_provider_with_classifier(url)
 
     if not provider:
-        return {
-            "source_id": f"src_unsupported_{url[:8]}",
-            "url": url,
-            "resolved_url": classification.resolved_url,
-            "source_type": classification.source_type.value,
-            "provider": "unsupported",
-            "is_permitted": False,
-            "security_status": classification.security_status.value,
-            "acquisition_permission": classification.acquisition_permission.value,
-            "source_access_status": classification.source_access_status.value,
-            "capabilities": [],
-            "mime_type": classification.mime_type,
-            "estimated_size_bytes": classification.estimated_size_bytes,
-            "inspection_status": "unsupported",
-            "errors": classification.errors or [f"No provider found capable of acquiring source: {url}"]
-        }
+        return make_error_envelope(
+            code="UNSUPPORTED_SOURCE",
+            message=classification.errors[0] if classification.errors else f"No provider found capable of acquiring source: {url}",
+            extra={
+                "source_id": f"src_unsupported_{url[:8]}",
+                "url": url,
+                "resolved_url": classification.resolved_url,
+                "source_type": classification.source_type.value,
+                "provider": "unsupported",
+                "is_permitted": False,
+                "security_status": classification.security_status.value,
+                "acquisition_permission": classification.acquisition_permission.value,
+                "source_access_status": classification.source_access_status.value,
+                "capabilities": [],
+                "mime_type": classification.mime_type,
+                "estimated_size_bytes": classification.estimated_size_bytes,
+                "inspection_status": "unsupported",
+                "errors": classification.errors or [f"No provider found capable of acquiring source: {url}"]
+            }
+        )
 
     inspection = await provider.inspect(url)
     if not inspection.resolved_url:
@@ -319,7 +366,7 @@ async def inspect_source(
         if not recommended_fmt:
             recommended_fmt = formats[0]
 
-    return {
+    return make_success_envelope({
         "source_id": source_id,
         "url": url,
         "resolved_url": inspection.resolved_url,
@@ -339,7 +386,7 @@ async def inspect_source(
         "assets": [a.model_dump() for a in inspection.assets],
         "formats_count": len(formats),
         "errors": inspection.errors
-    }
+    })
 
 # =====================================================================
 # MCP TOOL 2: list_formats
@@ -354,11 +401,15 @@ async def list_formats(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         source = await session.get(Source, source_id)
         if not source:
-            return {"error": f"Source ID '{source_id}' not found. Run inspect_source first."}
+            return make_error_envelope(
+                code="NOT_FOUND",
+                message=f"Source ID '{source_id}' not found. Run inspect_source first.",
+                remediation="Call inspect_source(url) first to register the source."
+            )
 
         stmt = select(SourceOption).where(SourceOption.source_id == source_id)
         res = await session.execute(stmt)
@@ -387,7 +438,7 @@ async def list_formats(
 
         recommended_id = "best_video_audio" if any(f["format_id"] == "best_video_audio" for f in recommended) else (recommended[0]["format_id"] if recommended else (formats_list[0]["format_id"] if formats_list else None))
 
-    return {
+    return make_success_envelope({
         "source_id": source_id,
         "recommended_format_id": recommended_id,
         "recommended_formats": recommended,
@@ -395,7 +446,7 @@ async def list_formats(
         "raw_or_other_formats": other,
         "formats": formats_list,
         "agent_guidance": "For video acquisition, use 'best_video_audio' or a 'best_{h}p_mp4' preset to ensure synchronized video and audio. Use 'best_audio_mp3' or 'best_audio_m4a' for audio. Avoid video-only streams without audio unless mute is explicitly requested."
-    }
+    })
 
 # =====================================================================
 # MCP TOOL 3: preflight_acquisition
@@ -412,18 +463,22 @@ async def preflight_acquisition(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {"can_acquire": False, "error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err, extra={"can_acquire": False})
 
         source = await session.get(Source, source_id)
         if not source:
-            return {"can_acquire": False, "error": f"Source ID '{source_id}' not found."}
+            return make_error_envelope(code="NOT_FOUND", message=f"Source ID '{source_id}' not found.", extra={"can_acquire": False})
 
         if not source.is_permitted:
-            return {
-                "can_acquire": False,
-                "requires_approval": False,
-                "approval_reason": "Source forbidden by security policy."
-            }
+            return make_error_envelope(
+                code="FORBIDDEN_POLICY",
+                message="Source forbidden by security policy.",
+                extra={
+                    "can_acquire": False,
+                    "requires_approval": False,
+                    "approval_reason": "Source forbidden by security policy."
+                }
+            )
 
         stmt = select(SourceOption).where(
             SourceOption.source_id == source_id,
@@ -432,13 +487,20 @@ async def preflight_acquisition(
         res = await session.execute(stmt)
         opt = res.scalar_one_or_none()
         if not opt:
-            return {"can_acquire": False, "error": f"Format ID '{format_id}' not available for source."}
+            return make_error_envelope(
+                code="FORMAT_UNAVAILABLE",
+                message=f"Format ID '{format_id}' not available for source.",
+                remediation="Call list_formats(source_id) to select an available format.",
+                extra={"can_acquire": False}
+            )
 
         if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
-            return {
-                "can_acquire": False,
-                "error": f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
-            }
+            return make_error_envelope(
+                code="QUOTA_EXCEEDED",
+                message=f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes).",
+                remediation="Select a smaller format or contact operator.",
+                extra={"can_acquire": False}
+            )
 
         requires_approval = opt.estimated_size_bytes is None or opt.estimated_size_bytes > 52_428_800
         approval_reason = None
@@ -468,7 +530,7 @@ async def preflight_acquisition(
             requires_approval = False
             approval_reason = None
 
-    return {
+    return make_success_envelope({
         "can_acquire": True,
         "requires_approval": requires_approval,
         "approval_reason": approval_reason,
@@ -477,7 +539,7 @@ async def preflight_acquisition(
         "is_cached": is_cached,
         "cached_artifact_id": duplicate_art.id if is_cached else None,
         "duplicate_artifact_id": duplicate_art.id if duplicate_art else None
-    }
+    })
 
 # =====================================================================
 # MCP TOOL 4: request_approval
@@ -494,13 +556,13 @@ async def request_approval(
             session, api_key=api_key, token=token, required_permission="acquire"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         source = await session.get(Source, source_id)
         if not source:
-            return {"error": f"Source ID '{source_id}' not found."}
+            return make_error_envelope(code="NOT_FOUND", message=f"Source ID '{source_id}' not found.")
         if not source.is_permitted:
-            return {"error": "Source is forbidden by security policy."}
+            return make_error_envelope(code="FORBIDDEN_POLICY", message="Source is forbidden by security policy.")
         option_result = await session.execute(
             select(SourceOption).where(
                 SourceOption.source_id == source_id,
@@ -509,7 +571,7 @@ async def request_approval(
         )
         option = option_result.scalar_one_or_none()
         if not option:
-            return {"error": f"Format ID '{format_id}' is not available for source."}
+            return make_error_envelope(code="FORMAT_UNAVAILABLE", message=f"Format ID '{format_id}' is not available for source.")
 
         approval = UserApproval(
             user_id=user.id,
@@ -523,11 +585,11 @@ async def request_approval(
         await session.commit()
         await session.refresh(approval)
 
-    return {
+    return make_success_envelope({
         "approval_id": approval.id,
         "status": approval.status,
         "message": "Approval request created. Operator approval required before acquisition starts."
-    }
+    })
 
 # =====================================================================
 # MCP TOOL 5: start_acquisition
@@ -545,13 +607,13 @@ async def start_acquisition(
             session, api_key=api_key, token=token, required_permission="acquire"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         source = await session.get(Source, source_id)
         if not source:
-            return {"error": f"Source ID '{source_id}' not found."}
+            return make_error_envelope(code="NOT_FOUND", message=f"Source ID '{source_id}' not found.")
         if not source.is_permitted:
-            return {"error": "Source is forbidden by security policy."}
+            return make_error_envelope(code="FORBIDDEN_POLICY", message="Source is forbidden by security policy.")
 
         stmt_opt = select(SourceOption).where(
             SourceOption.source_id == source_id,
@@ -560,15 +622,18 @@ async def start_acquisition(
         res_opt = await session.execute(stmt_opt)
         opt = res_opt.scalar_one_or_none()
         if not opt:
-            return {"error": f"Format ID '{format_id}' is not available for source."}
+            return make_error_envelope(code="FORMAT_UNAVAILABLE", message=f"Format ID '{format_id}' is not available for source.")
 
         if opt.estimated_size_bytes and opt.estimated_size_bytes > settings.MAX_FILE_SIZE_BYTES:
-            return {
-                "error": f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
-            }
+            return make_error_envelope(
+                code="QUOTA_EXCEEDED",
+                message=f"Acquisition rejected: File size ({opt.estimated_size_bytes} bytes) exceeds maximum engine quota limit ({settings.MAX_FILE_SIZE_BYTES} bytes)."
+            )
 
         user_id = user.id
-        dashboard_base = settings.CORS_ORIGINS[0].rstrip("/") if settings.CORS_ORIGINS else "http://localhost:5173"
+        dashboard_base = settings.FRONTEND_URL.rstrip("/") if hasattr(settings, "FRONTEND_URL") and settings.FRONTEND_URL else (
+            settings.CORS_ORIGINS[0].rstrip("/") if settings.CORS_ORIGINS else "http://localhost:5173"
+        )
         dashboard_url = f"{dashboard_base}/portal"
 
         cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
@@ -591,9 +656,11 @@ async def start_acquisition(
         approval = None
         if needs_approval:
             if not approval_id:
-                return {
-                    "error": "Operator approval is required for this acquisition (file size is unknown or exceeds 50 MB), but no approval_id was provided. Call request_approval first."
-                }
+                return make_error_envelope(
+                    code="APPROVAL_REQUIRED",
+                    message="Operator approval is required for this acquisition (file size is unknown or exceeds 50 MB), but no approval_id was provided. Call request_approval first.",
+                    remediation="Call request_approval(source_id, format_id, reason) first."
+                )
             approval = await session.get(UserApproval, approval_id)
             if (
                 not approval
@@ -602,9 +669,11 @@ async def start_acquisition(
                 or approval.source_id != source_id
                 or approval.format_id != format_id
             ):
-                return {
-                    "error": "Specified approval is missing, unapproved, or does not match this user, source, and format."
-                }
+                return make_error_envelope(
+                    code="APPROVAL_REQUIRED",
+                    message="Specified approval is missing, unapproved, or does not match this user, source, and format.",
+                    remediation="Wait for operator approval or verify approval_id."
+                )
         elif approval_id:
             approval = await session.get(UserApproval, approval_id)
             if (
@@ -614,9 +683,11 @@ async def start_acquisition(
                 or approval.source_id != source_id
                 or approval.format_id != format_id
             ):
-                return {
-                    "error": "Specified approval is missing, unapproved, or does not match this user, source, and format."
-                }
+                return make_error_envelope(
+                    code="APPROVAL_REQUIRED",
+                    message="Specified approval is missing, unapproved, or does not match this user, source, and format.",
+                    remediation="Wait for operator approval or verify approval_id."
+                )
 
         stmt_cache = select(Artifact).where(
             Artifact.origin_cache_key == cache_key,
@@ -661,7 +732,7 @@ async def start_acquisition(
             ))
             await session.commit()
             await session.refresh(job)
-            return {
+            return make_success_envelope({
                 "job_id": job.id,
                 "state": "completed",
                 "is_cached": True,
@@ -670,7 +741,7 @@ async def start_acquisition(
                 "user_dashboard_url": dashboard_url,
                 "created_at": job.created_at.isoformat(),
                 "message": "Instant acquisition cache hit. Artifact delivered from local deduplication cache."
-            }
+            })
 
         job = AcquisitionJob(
             user_id=user_id,
@@ -684,13 +755,13 @@ async def start_acquisition(
         await session.commit()
         await session.refresh(job)
 
-    return {
+    return make_success_envelope({
         "job_id": job.id,
         "state": job.state,
         "execution_mode": job.execution_mode,
         "user_dashboard_url": dashboard_url,
         "created_at": job.created_at.isoformat()
-    }
+    })
 
 # =====================================================================
 # MCP TOOL 6: get_job_status
@@ -705,13 +776,13 @@ async def get_job_status(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         job = await session.get(AcquisitionJob, job_id)
         if not job or (not _is_admin_credential(user, api_key, token) and job.user_id != user.id):
-            return {"error": f"Job ID '{job_id}' not found."}
+            return make_error_envelope(code="NOT_FOUND", message=f"Job ID '{job_id}' not found.")
 
-        return {
+        return make_success_envelope({
             "job_id": job.id,
             "state": job.state,
             "progress_percent": job.progress_percent,
@@ -721,7 +792,7 @@ async def get_job_status(
             "artifact_id": job.artifact_id,
             "error_message": job.error_message,
             "updated_at": job.updated_at.isoformat()
-        }
+        })
 
 # =====================================================================
 # MCP TOOL 7: get_artifact
@@ -736,15 +807,15 @@ async def get_artifact(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         art = await session.get(Artifact, artifact_id)
         if not art or not art.is_verified or (not _is_admin_credential(user, api_key, token) and art.user_id != user.id):
-            return {"error": f"Artifact ID '{artifact_id}' not found."}
+            return make_error_envelope(code="NOT_FOUND", message=f"Artifact ID '{artifact_id}' not found.")
 
         dl_url, expires_at = storage_service.generate_delivery_url(art.id)
 
-        return {
+        return make_success_envelope({
             "artifact_id": art.id,
             "filename": art.filename,
             "mime_type": art.mime_type,
@@ -754,7 +825,7 @@ async def get_artifact(
             "download_url": dl_url,
             "preview_url": dl_url,
             "expires_at": expires_at.isoformat()
-        }
+        })
 
 # =====================================================================
 # MCP TOOL 8: get_user_dashboard_link
@@ -769,23 +840,23 @@ async def get_user_dashboard_link(
     credential_type = (access_token.claims or {}).get("credential_type") if access_token else None
     portal_token = token or os.environ.get("MCP_AUTH_TOKEN", "")
     if access_token and credential_type != "portal":
-        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+        return make_error_envelope(code="AUTH_REQUIRED", message="A user portal credential is required to retrieve a dashboard link.")
     if not access_token and not portal_token.startswith("aae_usr_"):
-        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+        return make_error_envelope(code="AUTH_REQUIRED", message="A user portal credential is required to retrieve a dashboard link.")
     if api_key:
-        return {"error": "A user portal credential is required to retrieve a dashboard link."}
+        return make_error_envelope(code="AUTH_REQUIRED", message="A user portal credential is required to retrieve a dashboard link.")
 
     async with async_session_factory() as session:
         user, auth_err = await _resolve_user_from_credentials(
             session, api_key=api_key, token=token, required_permission="read"
         )
         if auth_err:
-            return {"error": auth_err}
+            return make_error_envelope(code="AUTH_REQUIRED", message=auth_err)
 
         is_admin = _is_admin_credential(user, api_key, token)
         if email and not is_admin and settings.ENVIRONMENT.lower() not in {"development", "dev", "test"}:
             if email.strip().lower() != user.email.lower():
-                return {"error": "Only administrators can request a dashboard link for another user."}
+                return make_error_envelope(code="FORBIDDEN_POLICY", message="Only administrators can request a dashboard link for another user.")
 
         if email and (is_admin or email.strip().lower() == user.email.lower()):
             email_clean = email.strip().lower()
@@ -809,17 +880,83 @@ async def get_user_dashboard_link(
             await session.commit()
             await session.refresh(user)
 
-        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}"
-        how_it_works_url = f"http://localhost:5173/portal?token={user.portal_token}&tab=how-it-works"
+        dashboard_base = settings.FRONTEND_URL.rstrip("/") if hasattr(settings, "FRONTEND_URL") and settings.FRONTEND_URL else (
+            settings.CORS_ORIGINS[0].rstrip("/") if settings.CORS_ORIGINS else "http://localhost:5173"
+        )
+        dashboard_url = f"{dashboard_base}/portal?token={user.portal_token}"
+        how_it_works_url = f"{dashboard_base}/portal?token={user.portal_token}&tab=how-it-works"
 
-        return {
+        return make_success_envelope({
             "user_id": user.id,
             "email": user.email,
             "portal_token": user.portal_token,
             "dashboard_url": dashboard_url,
             "how_it_works_url": how_it_works_url,
             "message": "Unique personal dashboard link ready. Share this link with the user so they can visit anytime to track downloads, view files, and see how the engine operates."
-        }
+        })
+
+# =====================================================================
+# MCP TOOL 9: describe_capabilities
+# =====================================================================
+async def describe_capabilities(
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Returns engine manifest, active providers, supported media/protocols,
+    quota boundaries, rights policies, and system status for autonomous agents.
+    """
+    async with async_session_factory() as session:
+        from sqlalchemy import func
+        q_count = await session.execute(
+            select(func.count(AcquisitionJob.id)).where(AcquisitionJob.state.in_(["queued", "claimed", "downloading", "processing"]))
+        )
+        active_jobs = q_count.scalar() or 0
+
+    providers_info = []
+    for p in provider_registry.list_providers():
+        providers_info.append({
+            "provider_id": p.provider_id,
+            "display_name": p.display_name,
+            "supported_categories": getattr(p, "supported_content_categories", ["media", "document", "archive"]),
+        })
+
+    data = {
+        "engine_version": "0.2.0",
+        "service_name": "Agent Acquisition Engine",
+        "status": "operational",
+        "active_jobs_in_queue": active_jobs,
+        "supported_protocols": ["http", "https", "magnet", "torrent", "embedded", "movie_query"],
+        "rights_tiers": [
+            "open_access",
+            "permissive_media",
+            "operator_approval_gated",
+            "restricted_commercial_drm"
+        ],
+        "policy_limits": {
+            "max_file_size_bytes": settings.MAX_FILE_SIZE_BYTES,
+            "approval_threshold_bytes": 52_428_800,
+            "unknown_size_requires_approval": True,
+            "default_timeout_seconds": settings.DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+            "max_retries_per_job": settings.MAX_RETRIES_PER_JOB,
+            "ssrf_protection_enabled": settings.ENABLE_SSRF_PROTECTION,
+            "supported_storage_modes": ["local", "direct_relay", "s3_compatible"]
+        },
+        "providers": providers_info,
+        "capabilities": [
+            "direct_file_streaming",
+            "adaptive_video_audio_muxing",
+            "ffprobe_stream_contract_validation",
+            "sha256_integrity_verification",
+            "deduplication_caching",
+            "operator_approval_workflows",
+            "signed_expiring_delivery_tokens",
+            "multi_user_isolation",
+            "autonomous_browser_sniffing",
+            "movie_intelligence_discovery"
+        ]
+    }
+    return make_success_envelope(data)
 
 @mcp.tool(
     name="inspect_source",
@@ -899,6 +1036,13 @@ async def _mcp_get_user_dashboard_link(
     email: Optional[str] = None
 ) -> Dict[str, Any]:
     return await get_user_dashboard_link(email)
+
+@mcp.tool(
+    name="describe_capabilities",
+    description="Returns the engine's capabilities, limits, active providers, supported media formats, rights policies, and operational status."
+)
+async def _mcp_describe_capabilities(ctx: Context) -> Dict[str, Any]:
+    return await describe_capabilities()
 
 async def run_server():
     """Initializes tables and starts MCP server over stdio."""

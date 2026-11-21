@@ -263,11 +263,71 @@ Always share:
 
 ## Error Handling & Edge Case Solutions
 
-| Error / Symptom | Root Cause | Engine Behavior & Agent Action |
+### Machine-Readable Error Envelope
+Every tool returns a structured error envelope when an issue occurs:
+```json
+{
+  "ok": false,
+  "error": "Human readable error message",
+  "error_code": "APPROVAL_REQUIRED",
+  "error_envelope": {
+    "code": "APPROVAL_REQUIRED",
+    "message": "Operator approval is required (file size is unknown or exceeds 50 MB)",
+    "retryable": false,
+    "remediation": "Call request_approval(source_id, format_id, reason) to request operator sign-off.",
+    "details": {}
+  },
+  "meta": {
+    "timestamp": "2026-11-21T17:00:00Z",
+    "engine_version": "0.2.0"
+  }
+}
+```
+
+### Stable Error Codes & Actions
+| Error Code | Root Cause | Engine Behavior & Agent Action |
 | :--- | :--- | :--- |
-| `Unrecognized content type: text/plain` | Direct markdown or plain text file | Engine handles via `direct_http` provider. Select format `original`. |
-| `Audio-only artifact for video format` | yt-dlp fallback `/best` matched audio | Engine enforces `[vcodec!=none]` and `ffprobe` video stream verification. |
-| `Failed to download file` in remote sandbox | Download URL contained `127.0.0.1` | Engine dynamically emits public tunnel host (`https://...trycloudflare.com`). |
-| `SSRF Policy Violation` | URL points to RFC-1918 or cloud metadata IP | Immediate block. Agent informs user target is forbidden. |
-| `Approval Required` | Resource size exceeds threshold (>50 MB) | Call `request_approval` and obtain operator confirmation. |
-| `Anti-Bot / Challenge` | Platform blocks automated scraper | Engine automatically falls back to Cobalt or Headless Chromium Sniffer. |
+| `APPROVAL_REQUIRED` | File size > 50 MB or file size is unknown | Call `request_approval(source_id, format_id, reason)`. Wait for operator approval before calling `start_acquisition`. |
+| `QUOTA_EXCEEDED` | File size exceeds maximum engine limit (500 MB) | Select a lower resolution/smaller format or notify operator. |
+| `FORMAT_UNAVAILABLE` | Format ID requested is not offered by source | Call `list_formats(source_id)` and select a valid available `format_id`. |
+| `SSRF_BLOCKED` | URL points to RFC-1918 or cloud metadata IP | Immediate block. Agent informs user destination is forbidden by security firewall. |
+| `AUTH_REQUIRED` | Source requires authentication or session credentials | User authorization required before source can be fetched. |
+| `NOT_FOUND` | Source, job, or artifact ID does not exist | Call `inspect_source` first to register source. |
+| `UNSUPPORTED_SOURCE` | URL scheme or format has no matching provider | Inform user source type cannot be acquired. |
+
+---
+
+## Engine Self-Discovery: `describe_capabilities`
+
+Agents can self-discover platform limits, active drivers, policy rules, and real-time queue depth at any time:
+
+**MCP Tool Call**:
+```json
+{
+  "name": "describe_capabilities",
+  "arguments": {}
+}
+```
+
+**Response**:
+```json
+{
+  "ok": true,
+  "engine_version": "0.2.0",
+  "status": "operational",
+  "active_jobs_in_queue": 3,
+  "supported_protocols": ["http", "https", "magnet", "torrent", "embedded", "movie_query"],
+  "rights_tiers": ["open_access", "permissive_media", "operator_approval_gated", "restricted_commercial_drm"],
+  "policy_limits": {
+    "max_file_size_bytes": 524288000,
+    "approval_threshold_bytes": 52428800,
+    "unknown_size_requires_approval": true,
+    "default_timeout_seconds": 300,
+    "max_retries_per_job": 3
+  },
+  "providers": [
+    {"provider_id": "permitted_media", "display_name": "Permitted Media Provider"},
+    {"provider_id": "direct_http", "display_name": "Direct HTTP/S Provider"}
+  ]
+}
+```
