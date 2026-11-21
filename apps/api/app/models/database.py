@@ -24,6 +24,10 @@ async def init_db() -> None:
         def _check_and_add_columns(connection):
             from sqlalchemy import inspect, text
             inspector = inspect(connection)
+            if "users" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("users")]
+                if "portal_token" not in cols:
+                    connection.execute(text("ALTER TABLE users ADD COLUMN portal_token VARCHAR(128)"))
             if "sources" in inspector.get_table_names():
                 cols = [c["name"] for c in inspector.get_columns("sources")]
                 if "source_type" not in cols:

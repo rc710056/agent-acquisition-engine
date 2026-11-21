@@ -4,10 +4,28 @@ import {
   AcquisitionJob,
   Artifact,
   AgentConnection,
-  ProviderInfo
+  ProviderInfo,
+  UserProfile,
+  PortalLinkResponse
 } from '../types';
 
 const BASE_URL = '/api/v1';
+
+function getAuthHeader(): Record<string, string> {
+  const token = localStorage.getItem('aae_user_token');
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = {
+    ...getAuthHeader(),
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
+}
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -18,13 +36,39 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  setToken(token: string) {
+    localStorage.setItem('aae_user_token', token);
+  },
+
+  getToken(): string | null {
+    return localStorage.getItem('aae_user_token');
+  },
+
+  clearToken() {
+    localStorage.removeItem('aae_user_token');
+  },
+
   async getHealth(): Promise<{ status: string; environment: string }> {
-    const res = await fetch('/health');
+    const res = await authFetch('/health');
+    return handleResponse(res);
+  },
+
+  async getMe(): Promise<UserProfile> {
+    const res = await authFetch(`${BASE_URL}/users/me`);
+    return handleResponse(res);
+  },
+
+  async getPortalLink(email?: string): Promise<PortalLinkResponse> {
+    const res = await authFetch(`${BASE_URL}/users/portal-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email || null })
+    });
     return handleResponse(res);
   },
 
   async inspectSource(url: string): Promise<SourceInspection> {
-    const res = await fetch(`${BASE_URL}/sources/inspect`, {
+    const res = await authFetch(`${BASE_URL}/sources/inspect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
@@ -33,7 +77,7 @@ export const api = {
   },
 
   async listFormats(sourceId: string): Promise<FormatOption[]> {
-    const res = await fetch(`${BASE_URL}/sources/${sourceId}/formats`);
+    const res = await authFetch(`${BASE_URL}/sources/${sourceId}/formats`);
     return handleResponse(res);
   },
 
@@ -43,7 +87,7 @@ export const api = {
     approval_reason: string | null;
     estimated_size_bytes: number | null;
   }> {
-    const res = await fetch(`${BASE_URL}/acquisitions/preflight`, {
+    const res = await authFetch(`${BASE_URL}/acquisitions/preflight`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source_id: sourceId, format_id: formatId })
@@ -52,7 +96,7 @@ export const api = {
   },
 
   async createJob(sourceId: string, formatId: string, approvalId?: string): Promise<AcquisitionJob> {
-    const res = await fetch(`${BASE_URL}/acquisitions/jobs`, {
+    const res = await authFetch(`${BASE_URL}/acquisitions/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -66,34 +110,34 @@ export const api = {
   },
 
   async listJobs(): Promise<AcquisitionJob[]> {
-    const res = await fetch(`${BASE_URL}/acquisitions/jobs`);
+    const res = await authFetch(`${BASE_URL}/acquisitions/jobs`);
     return handleResponse(res);
   },
 
   async getJob(jobId: string): Promise<AcquisitionJob> {
-    const res = await fetch(`${BASE_URL}/acquisitions/jobs/${jobId}`);
+    const res = await authFetch(`${BASE_URL}/acquisitions/jobs/${jobId}`);
     return handleResponse(res);
   },
 
   async cancelJob(jobId: string): Promise<AcquisitionJob> {
-    const res = await fetch(`${BASE_URL}/acquisitions/jobs/${jobId}/cancel`, {
+    const res = await authFetch(`${BASE_URL}/acquisitions/jobs/${jobId}/cancel`, {
       method: 'POST'
     });
     return handleResponse(res);
   },
 
   async listArtifacts(): Promise<Artifact[]> {
-    const res = await fetch(`${BASE_URL}/artifacts`);
+    const res = await authFetch(`${BASE_URL}/artifacts`);
     return handleResponse(res);
   },
 
   async listConnections(): Promise<AgentConnection[]> {
-    const res = await fetch(`${BASE_URL}/connections`);
+    const res = await authFetch(`${BASE_URL}/connections`);
     return handleResponse(res);
   },
 
   async createConnection(agentName: string): Promise<AgentConnection> {
-    const res = await fetch(`${BASE_URL}/connections`, {
+    const res = await authFetch(`${BASE_URL}/connections`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_name: agentName })
@@ -102,14 +146,14 @@ export const api = {
   },
 
   async revokeConnection(id: string): Promise<void> {
-    const res = await fetch(`${BASE_URL}/connections/${id}`, {
+    const res = await authFetch(`${BASE_URL}/connections/${id}`, {
       method: 'DELETE'
     });
     if (!res.ok) throw new Error('Failed to revoke agent connection');
   },
 
   async listProviders(): Promise<ProviderInfo[]> {
-    const res = await fetch(`${BASE_URL}/providers`);
+    const res = await authFetch(`${BASE_URL}/providers`);
     return handleResponse(res);
   }
 };

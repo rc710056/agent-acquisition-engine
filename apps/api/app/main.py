@@ -10,7 +10,8 @@ from apps.api.app.routes import (
     approvals,
     artifacts,
     providers,
-    agent_connections
+    agent_connections,
+    users
 )
 
 @asynccontextmanager
@@ -54,6 +55,7 @@ app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(providers.router, prefix="/api/v1")
 app.include_router(agent_connections.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 
 # Mount MCP Server-Sent Events (SSE) remote transport at /mcp
 from services.mcp_server.server import mcp

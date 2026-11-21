@@ -72,3 +72,22 @@ export interface ProviderInfo {
   supported_schemes: string[];
   capabilities: string[];
 }
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  role: string;
+  portal_token: string;
+  dashboard_url: string;
+  active_jobs_count: number;
+  artifacts_count: number;
+  pending_approvals_count: number;
+}
+
+export interface PortalLinkResponse {
+  user_id: string;
+  email: string;
+  portal_token: string;
+  dashboard_url: string;
+  created: boolean;
+}

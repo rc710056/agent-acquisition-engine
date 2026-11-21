@@ -37,12 +37,21 @@ mcp = MCPServer(
 )
 
 async def _get_default_user_id(session) -> str:
+    import secrets
     stmt = select(User).limit(1)
     res = await session.execute(stmt)
     user = res.scalar_one_or_none()
     if not user:
-        user = User(email="agent@antigravity.internal", hashed_password="default_hash", role="agent")
+        user = User(
+            email="agent@antigravity.internal",
+            hashed_password="default_hash",
+            role="agent",
+            portal_token=f"aae_usr_{secrets.token_hex(20)}"
+        )
         session.add(user)
+        await session.flush()
+    elif not user.portal_token:
+        user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
         await session.flush()
     return user.id
 
@@ -300,6 +309,8 @@ async def request_approval(source_id: str, format_id: str, reason: str) -> Dict[
             return {"error": f"Source ID '{source_id}' not found."}
 
         user_id = await _get_default_user_id(session)
+        user = await session.get(User, user_id)
+        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}" if (user and user.portal_token) else "http://localhost:5173/"
         approval = UserApproval(
             user_id=user_id,
             source_id=source_id,
@@ -360,6 +371,8 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
                 }
 
         user_id = await _get_default_user_id(session)
+        user = await session.get(User, user_id)
+        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}" if (user and user.portal_token) else "http://localhost:5173/"
 
         # 0. Check deduplication cache for instant fulfillment
         cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
@@ -398,6 +411,7 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
                 "is_cached": True,
                 "artifact_id": cached_art.id,
                 "execution_mode": job.execution_mode,
+                "user_dashboard_url": dashboard_url,
                 "created_at": job.created_at.isoformat(),
                 "message": "Instant acquisition cache hit. Artifact delivered from local deduplication cache."
             }
@@ -418,6 +432,7 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
         "job_id": job.id,
         "state": job.state,
         "execution_mode": job.execution_mode,
+        "user_dashboard_url": dashboard_url,
         "created_at": job.created_at.isoformat()
     }
 
@@ -470,6 +485,55 @@ async def get_artifact(artifact_id: str) -> Dict[str, Any]:
             "is_verified": art.is_verified,
             "download_url": dl_url,
             "expires_at": expires_at.isoformat()
+        }
+
+# =====================================================================
+# MCP TOOL 8: get_user_dashboard_link
+# =====================================================================
+@mcp.tool(
+    name="get_user_dashboard_link",
+    description="Generates or retrieves a unique permanent personal dashboard link that a human user can bookmark and visit anytime to monitor live acquisitions, download files, manage approvals, and explore how the platform works."
+)
+async def get_user_dashboard_link(email: Optional[str] = None) -> Dict[str, Any]:
+    import secrets
+    async with async_session_factory() as session:
+        if email:
+            email_clean = email.strip().lower()
+            stmt = select(User).where(User.email == email_clean)
+            res = await session.execute(stmt)
+            user = res.scalar_one_or_none()
+            if not user:
+                user = User(
+                    email=email_clean,
+                    hashed_password=f"auto_{secrets.token_hex(16)}",
+                    role="user",
+                    portal_token=f"aae_usr_{secrets.token_hex(20)}"
+                )
+                session.add(user)
+                await session.commit()
+                await session.refresh(user)
+            elif not user.portal_token:
+                user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
+                await session.commit()
+                await session.refresh(user)
+        else:
+            user_id = await _get_default_user_id(session)
+            user = await session.get(User, user_id)
+            if not user.portal_token:
+                user.portal_token = f"aae_usr_{secrets.token_hex(20)}"
+                await session.commit()
+                await session.refresh(user)
+
+        dashboard_url = f"http://localhost:5173/portal?token={user.portal_token}"
+        how_it_works_url = f"http://localhost:5173/portal?token={user.portal_token}&tab=how-it-works"
+
+        return {
+            "user_id": user.id,
+            "email": user.email,
+            "portal_token": user.portal_token,
+            "dashboard_url": dashboard_url,
+            "how_it_works_url": how_it_works_url,
+            "message": "Unique personal dashboard link ready. Share this link with the user so they can visit anytime to track downloads, view files, and see how the engine operates."
         }
 
 async def run_server():
