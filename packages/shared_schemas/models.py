@@ -78,6 +78,9 @@ class FormatOption(BaseModel):
     estimated_size_bytes: Optional[int] = None
     quality_label: str = "original"
     download_url: Optional[str] = None
+    has_audio: Optional[bool] = None
+    has_video: Optional[bool] = None
+    category: Optional[str] = "recommended" # recommended, audio_only, video_only, raw
     provider_restrictions: Optional[List[str]] = []
 
 class SourceInspectionResponse(BaseModel):

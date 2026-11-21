@@ -44,6 +44,12 @@ async def init_db() -> None:
                 cols = [c["name"] for c in inspector.get_columns("source_options")]
                 if "download_url" not in cols:
                     connection.execute(text("ALTER TABLE source_options ADD COLUMN download_url TEXT"))
+                if "has_audio" not in cols:
+                    connection.execute(text("ALTER TABLE source_options ADD COLUMN has_audio BOOLEAN"))
+                if "has_video" not in cols:
+                    connection.execute(text("ALTER TABLE source_options ADD COLUMN has_video BOOLEAN"))
+                if "category" not in cols:
+                    connection.execute(text("ALTER TABLE source_options ADD COLUMN category VARCHAR(50) DEFAULT 'recommended'"))
         await conn.run_sync(_check_and_add_columns)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

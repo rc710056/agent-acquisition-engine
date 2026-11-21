@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Awaitable
@@ -21,10 +22,27 @@ from apps.api.app.security.ssrf import SSRFValidator
 from apps.api.app.security.sanitization import sanitize_filename
 from apps.api.app.services.verification import FileVerifier, VerificationResult
 
+def get_friendly_resolution_name(height: int) -> str:
+    if height >= 2160:
+        return f"4K Ultra HD ({height}p)"
+    elif height >= 1440:
+        return f"2K Quad HD ({height}p)"
+    elif height >= 1080:
+        return f"Full HD ({height}p)"
+    elif height >= 720:
+        return f"HD ({height}p)"
+    elif height >= 480:
+        return f"SD ({height}p)"
+    elif height >= 360:
+        return f"Standard ({height}p)"
+    return f"{height}p"
+
 class PermittedMediaProvider(BaseProviderContract):
     """
-    Acquisition provider for authorized media platforms and webpages with embedded media.
-    Uses yt-dlp metadata extraction and direct stream discovery.
+    Acquisition provider for authorized media platforms (YouTube, Vimeo, Reddit, etc.)
+    and generic webpages with embedded media.
+    Discovers stream tracks, synthesizes high-quality Video+Audio presets,
+    and multiplexes synchronized video+audio containers using ffmpeg.
     """
 
     @property
@@ -33,7 +51,7 @@ class PermittedMediaProvider(BaseProviderContract):
 
     @property
     def display_name(self) -> str:
-        return "Permitted Media Provider (yt-dlp / Embedded Media)"
+        return "Permitted Media Provider (Muxed Video+Audio / yt-dlp)"
 
     def can_handle(self, url: str) -> bool:
         if not url:
@@ -69,7 +87,8 @@ class PermittedMediaProvider(BaseProviderContract):
         thumbnail_url: Optional[str] = None
         duration: Optional[float] = None
         resolved_url = url
-        primary_mime = "video/mp4"
+        has_video = False
+        has_audio = False
 
         try:
             import yt_dlp
@@ -88,56 +107,87 @@ class PermittedMediaProvider(BaseProviderContract):
                     resolved_url = info.get("webpage_url") or url
 
                     raw_formats = info.get("formats", [])
-                    seen_formats = set()
+                    video_formats = [f for f in raw_formats if f.get("vcodec") != "none"]
+                    audio_formats = [f for f in raw_formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
 
-                    for f in raw_formats:
-                        fmt_id = f.get("format_id")
-                        vcodec = f.get("vcodec")
-                        acodec = f.get("acodec")
-                        ext = f.get("ext", "mp4")
-                        res = f.get("resolution") or (f"{f.get('width')}x{f.get('height')}" if f.get("width") else None)
-                        f_url = f.get("url")
+                    has_video = len(video_formats) > 0
+                    has_audio = len(audio_formats) > 0
 
-                        if vcodec == "none" and acodec == "none":
-                            continue
+                    if has_video:
+                        # Find unique heights in descending order
+                        heights = sorted(list(set(f.get("height") for f in video_formats if f.get("height"))), reverse=True)
+                        max_h = heights[0] if heights else 1080
 
-                        filesize = f.get("filesize") or f.get("filesize_approx")
-                        height = f.get("height")
-                        label = f"{height}p ({ext})" if height else f"{fmt_id} ({ext})"
-
-                        if label in seen_formats:
-                            continue
-                        seen_formats.add(label)
-
-                        file_type = "video" if vcodec != "none" else "audio"
-                        mime = f"{file_type}/{ext}" if ext in {"mp4", "webm", "mp3", "m4a", "ogg"} else f"{file_type}/mp4"
-
+                        # 1. BEST QUALITY COMPOSITE (VIDEO + AUDIO) - MUST BE FIRST!
                         formats.append(FormatOption(
-                            format_id=fmt_id,
-                            file_type=file_type,
-                            mime_type=mime,
-                            resolution=res,
-                            codec=f"{vcodec}/{acodec}" if vcodec else acodec,
-                            estimated_size_bytes=filesize,
-                            quality_label=label,
-                            download_url=f_url
+                            format_id="best_video_audio",
+                            file_type="video",
+                            mime_type="video/mp4",
+                            resolution=f"{max_h}p",
+                            codec="h264/aac",
+                            estimated_size_bytes=None,
+                            quality_label=f"★ Best Quality ({get_friendly_resolution_name(max_h)}) • with Audio",
+                            has_audio=True,
+                            has_video=True,
+                            category="recommended"
+                        ))
+
+                        # 2. RESOLUTION-SPECIFIC VIDEO + AUDIO PRESETS
+                        for h in heights:
+                            formats.append(FormatOption(
+                                format_id=f"best_{h}p_mp4",
+                                file_type="video",
+                                mime_type="video/mp4",
+                                resolution=f"{h}p",
+                                codec="h264/aac",
+                                estimated_size_bytes=None,
+                                quality_label=f"{get_friendly_resolution_name(h)} • with Audio",
+                                has_audio=True,
+                                has_video=True,
+                                category="recommended"
+                            ))
+
+                    # 3. AUDIO-ONLY PRESETS
+                    if has_audio:
+                        formats.append(FormatOption(
+                            format_id="best_audio_m4a",
+                            file_type="audio",
+                            mime_type="audio/mp4",
+                            resolution=None,
+                            codec="aac",
+                            estimated_size_bytes=None,
+                            quality_label="Best Quality Audio (M4A / AAC)",
+                            has_audio=True,
+                            has_video=False,
+                            category="audio_only"
+                        ))
+                        formats.append(FormatOption(
+                            format_id="best_audio_mp3",
+                            file_type="audio",
+                            mime_type="audio/mpeg",
+                            resolution=None,
+                            codec="mp3",
+                            estimated_size_bytes=None,
+                            quality_label="Standard Audio (MP3 320k)",
+                            has_audio=True,
+                            has_video=False,
+                            category="audio_only"
                         ))
 
                     if formats:
                         assets.append(MediaAsset(
                             asset_id="primary_media",
-                            asset_type="video" if any(f.file_type == "video" for f in formats) else "audio",
+                            asset_type="video" if has_video else "audio",
                             title=title,
                             url=resolved_url,
                             thumbnail_url=thumbnail_url,
                             duration_seconds=float(duration) if duration else None,
-                            mime_type=formats[0].mime_type
+                            mime_type="video/mp4" if has_video else "audio/mp4"
                         ))
-        except Exception as e:
-            # Check if this is an embedded webpage with video tags
+        except Exception:
             pass
 
-        # Fallback inspection for HTML page with embedded media
+        # Fallback inspection for HTML page with embedded media tags
         if not formats:
             try:
                 headers = {"User-Agent": "Mozilla/5.0"}
@@ -160,8 +210,11 @@ class PermittedMediaProvider(BaseProviderContract):
                             resolution=None,
                             codec=None,
                             estimated_size_bytes=None,
-                            quality_label=f"Embedded Video {idx+1}",
-                            download_url=full_v_url
+                            quality_label=f"Embedded Video {idx+1} (MP4)",
+                            download_url=full_v_url,
+                            has_audio=True,
+                            has_video=True,
+                            category="recommended"
                         ))
 
                     for idx, (s_url, s_type) in enumerate(source_srcs):
@@ -175,7 +228,10 @@ class PermittedMediaProvider(BaseProviderContract):
                             codec=None,
                             estimated_size_bytes=None,
                             quality_label=f"Source Stream {idx+1} ({s_type})",
-                            download_url=full_s_url
+                            download_url=full_s_url,
+                            has_audio=True,
+                            has_video=True,
+                            category="recommended"
                         ))
             except Exception:
                 pass
@@ -196,6 +252,9 @@ class PermittedMediaProvider(BaseProviderContract):
                 errors=["No extractable media streams found on target platform or page."]
             )
 
+        # Invariant: If video is present, primary mime must be video/mp4, NEVER audio/mp4!
+        primary_mime = "video/mp4" if any(f.file_type == "video" for f in formats) else "audio/mp4"
+
         return SourceInspectionResponse(
             source_id=f"src_{uuid.uuid4().hex[:12]}",
             url=url,
@@ -206,8 +265,8 @@ class PermittedMediaProvider(BaseProviderContract):
             security_status=SecurityStatus.SAFE,
             acquisition_permission=AcquisitionPermission.PERMITTED,
             source_access_status=SourceAccessStatus.ACCESSIBLE,
-            capabilities=["media_extraction", "stream_download"],
-            mime_type=formats[0].mime_type if formats else primary_mime,
+            capabilities=["media_extraction", "stream_muxing", "video_audio_mux"],
+            mime_type=primary_mime,
             estimated_size_bytes=formats[0].estimated_size_bytes if formats else None,
             inspection_status="inspected",
             title=title or "Permitted Media Source",
@@ -242,8 +301,80 @@ class PermittedMediaProvider(BaseProviderContract):
             raise ValueError(f"Cannot acquire media: {'; '.join(inspection.errors) or 'No formats available.'}")
 
         target_format = next((f for f in inspection.formats if f.format_id == format_id), inspection.formats[0])
-        direct_url = target_format.download_url or url
 
+        # If it's a composite or yt-dlp format (like best_video_audio, best_1080p_mp4, best_audio_m4a)
+        if format_id.startswith("best_") or not target_format.download_url:
+            import yt_dlp
+            ext = "mp4" if target_format.file_type == "video" else "m4a"
+
+            # Determine yt-dlp format selector
+            if target_format.file_type == "audio" or "audio" in format_id:
+                fmt_spec = "bestaudio/best"
+                ext = "m4a"
+            else:
+                m_h = re.search(r'best_(\d+)p', format_id)
+                if m_h:
+                    h = m_h.group(1)
+                    fmt_spec = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
+                else:
+                    fmt_spec = "bestvideo+bestaudio/best"
+                ext = "mp4"
+
+            temp_stem = f"ytdl_{uuid.uuid4().hex[:8]}"
+            temp_template = str(destination_path.parent / f"{temp_stem}.%(ext)s")
+
+            ydl_opts = {
+                "format": fmt_spec,
+                "outtmpl": temp_template,
+                "merge_output_format": "mp4" if ext == "mp4" else None,
+                "quiet": True,
+                "no_warnings": True,
+                "overwrites": True
+            }
+
+            loop = asyncio.get_running_loop()
+            target_target_url = inspection.resolved_url or url
+
+            def _ytdl_run():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([target_target_url])
+
+            await loop.run_in_executor(None, _ytdl_run)
+
+            # Discover generated file
+            candidates = list(destination_path.parent.glob(f"{temp_stem}.*"))
+            if not candidates:
+                raise RuntimeError(f"Media extraction failed to produce file for format '{format_id}'.")
+            actual_temp_file = candidates[0]
+
+            # Move to destination_path
+            if destination_path.exists():
+                destination_path.unlink()
+            actual_temp_file.rename(destination_path)
+
+            file_size = destination_path.stat().st_size
+            if file_size > max_size_bytes:
+                destination_path.unlink(missing_ok=True)
+                raise ValueError(f"Acquired media size ({file_size} bytes) exceeds limit ({max_size_bytes} bytes)")
+
+            sha256 = hashlib.sha256()
+            with open(destination_path, "rb") as f:
+                while chunk := f.read(65536):
+                    sha256.update(chunk)
+
+            if progress_callback:
+                await progress_callback(file_size, file_size)
+
+            return {
+                "filename": f"media_{uuid.uuid4().hex[:8]}.{ext}",
+                "mime_type": "video/mp4" if ext == "mp4" else "audio/mp4",
+                "transferred_bytes": file_size,
+                "total_bytes": file_size,
+                "sha256": sha256.hexdigest(),
+            }
+
+        # Otherwise fallback to direct HTTP streaming
+        direct_url = target_format.download_url or url
         sha256 = hashlib.sha256()
         transferred_bytes = 0
         total_bytes: Optional[int] = None

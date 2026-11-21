@@ -136,7 +136,10 @@ async def inspect_source(url: str, user_preferences: Optional[Dict[str, Any]] = 
                     codec=fmt.codec,
                     estimated_size_bytes=fmt.estimated_size_bytes,
                     quality_label=fmt.quality_label,
-                    download_url=fmt.download_url
+                    download_url=fmt.download_url,
+                    has_audio=fmt.has_audio,
+                    has_video=fmt.has_video,
+                    category=fmt.category
                 ))
         await session.commit()
 

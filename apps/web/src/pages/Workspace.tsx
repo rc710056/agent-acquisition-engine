@@ -220,33 +220,85 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
           )}
 
           {/* Format Selection & Launch */}
-          {inspection.is_permitted && formats.length > 0 && (
-            <div className="pt-2 border-t border-amoled-border flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <span className="text-xs text-gray-400">Target Format:</span>
-                <select
-                  value={selectedFormat}
-                  onChange={(e) => handleFormatChange(e.target.value)}
-                  className="bg-amoled-input border border-amoled-border text-xs text-gray-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-electric-500"
-                >
-                  {formats.map((f) => (
-                    <option key={f.format_id} value={f.format_id}>
-                      {f.quality_label} {f.resolution ? `[${f.resolution}]` : ''} ({f.mime_type})
-                    </option>
-                  ))}
-                </select>
-              </div>
+          {inspection.is_permitted && formats.length > 0 && (() => {
+            const currentFmt = formats.find((f) => f.format_id === selectedFormat) || formats[0];
+            const recommended = formats.filter((f) => f.category === 'recommended' || (f.has_audio !== false && f.file_type === 'video'));
+            const audioOnly = formats.filter((f) => f.category === 'audio_only' || f.file_type === 'audio');
+            const otherFormats = formats.filter((f) => !recommended.includes(f) && !audioOnly.includes(f));
 
-              <button
-                onClick={handleStartAcquisition}
-                disabled={starting}
-                className="px-4 py-2 rounded-md bg-electric-600 hover:bg-electric-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center space-x-2 shadow-md transition-all"
-              >
-                {starting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
-                <span>Dispatch Acquisition Job</span>
-              </button>
-            </div>
-          )}
+            return (
+              <div className="pt-3 border-t border-amoled-border flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-400 font-medium">Target Format:</span>
+                    <select
+                      value={selectedFormat}
+                      onChange={(e) => handleFormatChange(e.target.value)}
+                      className="bg-amoled-input border border-amoled-border text-xs text-gray-100 rounded-md px-3 py-1.5 focus:outline-none focus:border-electric-500 font-mono shadow-inner max-w-xs md:max-w-md truncate"
+                    >
+                      {recommended.length > 0 && (
+                        <optgroup label="🎯 Video + Audio (Recommended)">
+                          {recommended.map((f) => (
+                            <option key={f.format_id} value={f.format_id}>
+                              {f.quality_label} ({f.mime_type})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {audioOnly.length > 0 && (
+                        <optgroup label="🎧 Audio Only">
+                          {audioOnly.map((f) => (
+                            <option key={f.format_id} value={f.format_id}>
+                              {f.quality_label} ({f.mime_type})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {otherFormats.length > 0 && (
+                        <optgroup label="🎬 Other Formats">
+                          {otherFormats.map((f) => (
+                            <option key={f.format_id} value={f.format_id}>
+                              {f.quality_label} {f.resolution ? `[${f.resolution}]` : ''} ({f.mime_type})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Audio/Video Stream Indicator Pill */}
+                  {currentFmt && (
+                    <div className="flex items-center">
+                      {currentFmt.has_audio !== false && currentFmt.file_type === 'video' && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-800/50 text-emerald-300">
+                          🔊 Video + Audio Included
+                        </span>
+                      )}
+                      {currentFmt.file_type === 'audio' && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950/70 border border-cyan-800/50 text-cyan-300">
+                          🎧 Audio Track Only
+                        </span>
+                      )}
+                      {currentFmt.has_audio === false && currentFmt.file_type === 'video' && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/70 border border-amber-800/50 text-amber-300">
+                          🔇 Video Only (Mute)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleStartAcquisition}
+                  disabled={starting}
+                  className="px-4 py-2 rounded-md bg-electric-600 hover:bg-electric-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center justify-center space-x-2 shadow-md transition-all shrink-0"
+                >
+                  {starting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+                  <span>Dispatch Acquisition Job</span>
+                </button>
+              </div>
+            );
+          })()}
         </div>
       )}
 

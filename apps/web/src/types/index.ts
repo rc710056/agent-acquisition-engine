@@ -27,6 +27,9 @@ export interface FormatOption {
   codec?: string | null;
   estimated_size_bytes?: number | null;
   quality_label: string;
+  has_audio?: boolean;
+  has_video?: boolean;
+  category?: string;
 }
 
 export interface AcquisitionJob {

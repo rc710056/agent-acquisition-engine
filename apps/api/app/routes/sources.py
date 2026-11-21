@@ -110,7 +110,10 @@ async def inspect_source(req: SourceInspectionRequest, db: AsyncSession = Depend
                 codec=fmt.codec,
                 estimated_size_bytes=fmt.estimated_size_bytes,
                 quality_label=fmt.quality_label,
-                download_url=fmt.download_url
+                download_url=fmt.download_url,
+                has_audio=fmt.has_audio,
+                has_video=fmt.has_video,
+                category=fmt.category
             ))
 
     await db.commit()
@@ -137,7 +140,10 @@ async def list_formats(source_id: str, db: AsyncSession = Depends(get_db)):
             codec=opt.codec,
             estimated_size_bytes=opt.estimated_size_bytes,
             quality_label=opt.quality_label,
-            download_url=opt.download_url
+            download_url=opt.download_url,
+            has_audio=opt.has_audio,
+            has_video=opt.has_video,
+            category=opt.category
         )
         for opt in options
     ]

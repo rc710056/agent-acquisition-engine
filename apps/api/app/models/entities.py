@@ -83,8 +83,11 @@ class SourceOption(Base):
     resolution = Column(String(50), nullable=True)
     codec = Column(String(50), nullable=True)
     estimated_size_bytes = Column(BigInteger, nullable=True)
-    quality_label = Column(String(50), default="original", nullable=False)
+    quality_label = Column(String(100), default="original", nullable=False)
     download_url = Column(Text, nullable=True)
+    has_audio = Column(Boolean, nullable=True)
+    has_video = Column(Boolean, nullable=True)
+    category = Column(String(50), default="recommended", nullable=True)
 
     source = relationship("Source", back_populates="options")
 
