@@ -5,6 +5,7 @@ from providers.pinterest.provider import PinterestProvider
 from providers.permitted_media.provider import PermittedMediaProvider
 from providers.direct_http.provider import DirectHTTPProvider
 from packages.source_classifier.classifier import SourceClassifier, ClassificationResult
+from packages.shared_schemas.models import SecurityStatus, SourceType
 
 class ProviderRegistryManager:
     """
@@ -48,9 +49,12 @@ class ProviderRegistryManager:
         and matches with the optimal provider.
         """
         classification = await SourceClassifier.classify(url)
+        if classification.security_status == SecurityStatus.BLOCKED:
+            return None, classification
+
         provider = self.get_provider(classification.provider_id)
-        if not provider:
-            # Fallback to can_handle on resolved URL
+        if not provider and classification.source_type != SourceType.UNSUPPORTED_SOURCE:
+            # Fallback to can_handle on resolved URL only if not unsupported
             provider = self.find_provider_for_url(classification.resolved_url)
         return provider, classification
 

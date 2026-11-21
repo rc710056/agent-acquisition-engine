@@ -308,9 +308,15 @@ class PermittedMediaProvider(BaseProviderContract):
             ext = "mp4" if target_format.file_type == "video" else "m4a"
 
             # Determine yt-dlp format selector
+            postprocessors = None
             if target_format.file_type == "audio" or "audio" in format_id:
                 fmt_spec = "bestaudio/best"
-                ext = "m4a"
+                ext = "m4a" if "m4a" in format_id else ("mp3" if "mp3" in format_id else "m4a")
+                postprocessors = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": ext,
+                    "preferredquality": "320" if ext == "mp3" else "192"
+                }]
             else:
                 m_h = re.search(r'best_(\d+)p', format_id)
                 if m_h:
@@ -331,6 +337,8 @@ class PermittedMediaProvider(BaseProviderContract):
                 "no_warnings": True,
                 "overwrites": True
             }
+            if postprocessors:
+                ydl_opts["postprocessors"] = postprocessors
 
             loop = asyncio.get_running_loop()
             target_target_url = inspection.resolved_url or url

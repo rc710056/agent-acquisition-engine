@@ -188,7 +188,10 @@ async def list_formats(source_id: str) -> Dict[str, Any]:
                 "resolution": opt.resolution,
                 "codec": opt.codec,
                 "estimated_size_bytes": opt.estimated_size_bytes,
-                "quality_label": opt.quality_label
+                "quality_label": opt.quality_label,
+                "has_audio": opt.has_audio,
+                "has_video": opt.has_video,
+                "category": opt.category
             }
             for opt in options
         ]
