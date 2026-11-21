@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ShieldCheck, Check, X } from 'lucide-react';
+import { api } from '../services/api';
 
 interface ApprovalItem {
   approval_id?: string;
@@ -19,11 +20,8 @@ export const Approvals: React.FC = () => {
 
   const fetchApprovals = async () => {
     try {
-      const res = await fetch('/api/v1/approvals');
-      if (res.ok) {
-        const data = await res.json();
-        setApprovals(data);
-      }
+      const data = await api.listApprovals();
+      setApprovals(data);
     } catch (e) {
       console.error('Failed to load approvals', e);
     } finally {
@@ -38,14 +36,8 @@ export const Approvals: React.FC = () => {
   const handleDecision = async (approvalId: string, decision: 'approved' | 'rejected') => {
     setDeciding(approvalId);
     try {
-      const res = await fetch(`/api/v1/approvals/${approvalId}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision })
-      });
-      if (res.ok) {
-        await fetchApprovals();
-      }
+      await api.decideApproval(approvalId, decision);
+      await fetchApprovals();
     } catch (e) {
       console.error('Failed to submit decision', e);
     } finally {

@@ -2,6 +2,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 from packages.provider_contracts.base import BaseProviderContract
 from providers.torrent.provider import TorrentProvider
+from providers.movie_intelligence.provider import MovieIntelligenceProvider
 from providers.browser_sniffer.provider import BrowserSnifferProvider
 from providers.pinterest.provider import PinterestProvider
 from providers.permitted_media.provider import PermittedMediaProvider
@@ -26,6 +27,7 @@ class ProviderRegistryManager:
         self._providers: List[BaseProviderContract] = []
         # Priority order: Torrents/P2P, Specialized platforms, generic media, galleries, cobalt, then direct http
         self.register(TorrentProvider())
+        self.register(MovieIntelligenceProvider())
         self.register(PinterestProvider())
         self.register(PermittedMediaProvider())
         self.register(GalleryDLProvider())

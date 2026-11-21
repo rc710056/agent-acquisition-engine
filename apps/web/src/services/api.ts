@@ -131,6 +131,20 @@ export const api = {
     return handleResponse(res);
   },
 
+  async listApprovals(): Promise<any[]> {
+    const res = await authFetch(`${BASE_URL}/approvals`);
+    return handleResponse(res);
+  },
+
+  async decideApproval(approvalId: string, decision: 'approved' | 'rejected'): Promise<any> {
+    const res = await authFetch(`${BASE_URL}/approvals/${approvalId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision })
+    });
+    return handleResponse(res);
+  },
+
   async listConnections(): Promise<AgentConnection[]> {
     const res = await authFetch(`${BASE_URL}/connections`);
     return handleResponse(res);

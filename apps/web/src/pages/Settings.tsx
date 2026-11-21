@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Database, HardDrive } from 'lucide-react';
+import { ShieldCheck, Database } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   return (
@@ -7,7 +7,7 @@ export const Settings: React.FC = () => {
       <div>
         <h2 className="text-xl font-semibold text-gray-100 tracking-tight">Engine Settings & Policies</h2>
         <p className="text-xs text-gray-400 mt-1">
-          Review system limits, SSRF network filters, storage driver paths, and security preferences.
+          Review system limits, SSRF network filters, and security preferences.
         </p>
       </div>
 
@@ -26,24 +26,6 @@ export const Settings: React.FC = () => {
             <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
               <span className="text-gray-500 text-[10px] uppercase font-mono">Signed Link Expiration (TTL)</span>
               <p className="mt-1 font-mono text-gray-200">3,600 seconds (1 hour)</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Storage Section */}
-        <div className="p-5 space-y-3">
-          <div className="flex items-center space-x-2 text-xs font-semibold text-gray-200">
-            <HardDrive className="w-4 h-4 text-electric-400" />
-            <span>STORAGE CONFIGURATION</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
-              <span className="text-gray-500 text-[10px] uppercase font-mono">Storage Backend</span>
-              <p className="mt-1 font-mono text-gray-200">Local Filesystem Vault (Isolated)</p>
-            </div>
-            <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
-              <span className="text-gray-500 text-[10px] uppercase font-mono">Max File Size Cap</span>
-              <p className="mt-1 font-mono text-gray-200">500 MB (524,288,000 bytes)</p>
             </div>
           </div>
         </div>

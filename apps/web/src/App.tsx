@@ -141,7 +141,12 @@ export const App: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-8">
-          {activeTab === 'workspace' && <Workspace onJobCreated={() => setActiveTab('jobs')} />}
+          {activeTab === 'workspace' && (
+            <Workspace
+              onJobCreated={() => setActiveTab('jobs')}
+              onNavigateToFiles={() => setActiveTab('files')}
+            />
+          )}
           {activeTab === 'jobs' && <Jobs />}
           {activeTab === 'files' && <Files />}
           {activeTab === 'approvals' && <Approvals />}
