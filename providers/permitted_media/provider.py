@@ -96,7 +96,12 @@ class PermittedMediaProvider(BaseProviderContract):
                 "quiet": True,
                 "no_warnings": True,
                 "extract_flat": False,
-                "skip_download": True
+                "skip_download": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "web"]
+                    }
+                }
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -107,11 +112,9 @@ class PermittedMediaProvider(BaseProviderContract):
                     resolved_url = info.get("webpage_url") or url
 
                     raw_formats = info.get("formats", [])
+                    has_video = any(f.get("vcodec") and f.get("vcodec") != "none" for f in raw_formats)
+                    has_audio = any(f.get("acodec") and f.get("acodec") != "none" for f in raw_formats)
                     video_formats = [f for f in raw_formats if f.get("vcodec") != "none"]
-                    audio_formats = [f for f in raw_formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
-
-                    has_video = len(video_formats) > 0
-                    has_audio = len(audio_formats) > 0
 
                     if has_video:
                         # Find unique heights in descending order
@@ -236,6 +239,18 @@ class PermittedMediaProvider(BaseProviderContract):
             except Exception:
                 pass
 
+        # Fallback inspection to Cobalt if direct scrapers failed or encountered anti-bot wall
+        if not formats:
+            try:
+                from providers.cobalt.provider import CobaltProvider
+                cobalt = CobaltProvider()
+                if cobalt.can_handle(url):
+                    cobalt_insp = await cobalt.inspect(url)
+                    if cobalt_insp.is_permitted and cobalt_insp.formats:
+                        return cobalt_insp
+            except Exception:
+                pass
+
         if not formats:
             return SourceInspectionResponse(
                 source_id=f"src_{uuid.uuid4().hex[:12]}",
@@ -298,6 +313,18 @@ class PermittedMediaProvider(BaseProviderContract):
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         inspection = await self.inspect(url)
         if not inspection.is_permitted or not inspection.formats:
+            # Attempt direct Cobalt fallback
+            from providers.cobalt.provider import CobaltProvider
+            cobalt = CobaltProvider()
+            if cobalt.can_handle(url):
+                return await cobalt.acquire(
+                    url=url,
+                    format_id=format_id,
+                    destination_path=destination_path,
+                    progress_callback=progress_callback,
+                    timeout_seconds=timeout_seconds,
+                    max_size_bytes=max_size_bytes
+                )
             raise ValueError(f"Cannot acquire media: {'; '.join(inspection.errors) or 'No formats available.'}")
 
         target_format = next((f for f in inspection.formats if f.format_id == format_id), inspection.formats[0])
@@ -335,7 +362,12 @@ class PermittedMediaProvider(BaseProviderContract):
                 "merge_output_format": "mp4" if ext == "mp4" else None,
                 "quiet": True,
                 "no_warnings": True,
-                "overwrites": True
+                "overwrites": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "web"]
+                    }
+                }
             }
             if postprocessors:
                 ydl_opts["postprocessors"] = postprocessors
@@ -347,18 +379,36 @@ class PermittedMediaProvider(BaseProviderContract):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([target_target_url])
 
-            await loop.run_in_executor(None, _ytdl_run)
+            try:
+                await loop.run_in_executor(None, _ytdl_run)
 
-            # Discover generated file
-            candidates = list(destination_path.parent.glob(f"{temp_stem}.*"))
-            if not candidates:
-                raise RuntimeError(f"Media extraction failed to produce file for format '{format_id}'.")
-            actual_temp_file = candidates[0]
+                # Discover generated file
+                candidates = list(destination_path.parent.glob(f"{temp_stem}.*"))
+                if not candidates:
+                    raise RuntimeError(f"Media extraction failed to produce file for format '{format_id}'.")
+                actual_temp_file = candidates[0]
 
-            # Move to destination_path
-            if destination_path.exists():
-                destination_path.unlink()
-            actual_temp_file.rename(destination_path)
+                # Move to destination_path
+                if destination_path.exists():
+                    destination_path.unlink()
+                actual_temp_file.rename(destination_path)
+            except Exception as ytdl_err:
+                # Anti-bot resilience: Fallback to Cobalt adapter if applicable
+                from providers.cobalt.provider import CobaltProvider
+                cobalt = CobaltProvider()
+                if cobalt.can_handle(target_target_url):
+                    try:
+                        return await cobalt.acquire(
+                            url=target_target_url,
+                            format_id=format_id,
+                            destination_path=destination_path,
+                            progress_callback=progress_callback,
+                            timeout_seconds=timeout_seconds,
+                            max_size_bytes=max_size_bytes
+                        )
+                    except Exception as cobalt_err:
+                        raise RuntimeError(f"Both primary yt-dlp ({ytdl_err}) and Cobalt fallback ({cobalt_err}) failed.")
+                raise ytdl_err
 
             file_size = destination_path.stat().st_size
             if file_size > max_size_bytes:

@@ -104,12 +104,13 @@ async def test_full_mcp_acquisition_journey(e2e_port, monkeypatch):
     job_start_result = await start_acquisition(source_id=source_id, format_id=selected_format)
     assert "job_id" in job_start_result
     job_id = job_start_result["job_id"]
-    assert job_start_result["state"] == "queued"
+    assert job_start_result["state"] in {"queued", "completed"}
 
-    # Step 5: Worker executes acquisition in background
-    worker = AcquisitionWorker()
-    processed = await worker.process_next_job(target_job_id=job_id)
-    assert processed is True
+    # Step 5: Worker executes acquisition in background if queued
+    if job_start_result["state"] == "queued":
+        worker = AcquisitionWorker()
+        processed = await worker.process_next_job(target_job_id=job_id)
+        assert processed is True
 
     # Step 6: Agent checks job status
     status_result = await get_job_status(job_id=job_id)

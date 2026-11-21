@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import hashlib
 from typing import Optional, Dict, Any, List
 from mcp.server.mcpserver import MCPServer
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from apps.api.app.models.entities import (
     Source,
     SourceOption,
     AcquisitionJob,
+    JobEvent,
     UserApproval,
     Artifact,
     User
@@ -236,27 +238,29 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
             requires_approval = True
             approval_reason = f"File size ({opt.estimated_size_bytes} bytes) exceeds 50 MB threshold. Operator approval required."
 
-        # Duplicate artifact detection
+        # Deduplication cache lookup
+        cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
         stmt_dup = (
             select(Artifact)
-            .join(AcquisitionJob, AcquisitionJob.artifact_id == Artifact.id)
             .where(
-                AcquisitionJob.source_id == source_id,
-                AcquisitionJob.format_id == format_id,
-                AcquisitionJob.state == JobState.COMPLETED.value,
+                Artifact.origin_cache_key == cache_key,
                 Artifact.is_verified == True
             )
+            .order_by(Artifact.created_at.desc())
             .limit(1)
         )
         dup_res = await session.execute(stmt_dup)
         duplicate_art = dup_res.scalar_one_or_none()
+        is_cached = bool(duplicate_art and storage_service.get_artifact_path(duplicate_art.storage_path).exists())
 
     return {
         "can_acquire": True,
-        "requires_approval": requires_approval,
-        "approval_reason": approval_reason,
+        "requires_approval": requires_approval if not is_cached else False,
+        "approval_reason": approval_reason if not is_cached else None,
         "estimated_size_bytes": opt.estimated_size_bytes,
         "storage_available": True,
+        "is_cached": is_cached,
+        "cached_artifact_id": duplicate_art.id if is_cached else None,
         "duplicate_artifact_id": duplicate_art.id if duplicate_art else None
     }
 
@@ -334,6 +338,47 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
                 }
 
         user_id = await _get_default_user_id(session)
+
+        # 0. Check deduplication cache for instant fulfillment
+        cache_key = hashlib.sha256(f"{source.canonical_url or source.url}::{format_id}".encode()).hexdigest()
+        stmt_cache = select(Artifact).where(
+            Artifact.origin_cache_key == cache_key,
+            Artifact.is_verified == True
+        ).order_by(Artifact.created_at.desc()).limit(1)
+        cache_res = await session.execute(stmt_cache)
+        cached_art = cache_res.scalar_one_or_none()
+        if cached_art and storage_service.get_artifact_path(cached_art.storage_path).exists():
+            job = AcquisitionJob(
+                user_id=user_id,
+                source_id=source_id,
+                format_id=format_id,
+                execution_mode=execution_mode,
+                state=JobState.COMPLETED.value,
+                progress_percent=100.0,
+                bytes_transferred=cached_art.size_bytes,
+                total_bytes=cached_art.size_bytes,
+                artifact_id=cached_art.id,
+                current_operation="Instant acquisition fulfilled from deduplication cache"
+            )
+            session.add(job)
+            await session.flush()
+            session.add(JobEvent(
+                job_id=job.id,
+                event_type="completed",
+                message=f"Artifact {cached_art.filename} served from deduplication cache.",
+                payload={"cached": True, "artifact_id": cached_art.id}
+            ))
+            await session.commit()
+            await session.refresh(job)
+            return {
+                "job_id": job.id,
+                "state": "completed",
+                "is_cached": True,
+                "artifact_id": cached_art.id,
+                "execution_mode": job.execution_mode,
+                "created_at": job.created_at.isoformat(),
+                "message": "Instant acquisition cache hit. Artifact delivered from local deduplication cache."
+            }
 
         job = AcquisitionJob(
             user_id=user_id,

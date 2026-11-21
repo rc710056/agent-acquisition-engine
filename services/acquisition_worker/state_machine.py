@@ -8,8 +8,8 @@ VALID_TRANSITIONS: Dict[JobState, Set[JobState]] = {
     JobState.INSPECTING: {JobState.AWAITING_APPROVAL, JobState.QUEUED, JobState.FAILED, JobState.CANCELLED},
     JobState.NEEDS_CLARIFICATION: {JobState.UNDERSTANDING, JobState.QUEUED, JobState.FAILED, JobState.CANCELLED},
     JobState.AWAITING_APPROVAL: {JobState.QUEUED, JobState.CANCELLED, JobState.FAILED, JobState.EXPIRED},
-    JobState.QUEUED: {JobState.DOWNLOADING, JobState.CANCELLED, JobState.FAILED},
-    JobState.DOWNLOADING: {JobState.VERIFYING, JobState.PARTIALLY_COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.QUEUED}, # QUEUED for retry
+    JobState.QUEUED: {JobState.DOWNLOADING, JobState.COMPLETED, JobState.CANCELLED, JobState.FAILED},
+    JobState.DOWNLOADING: {JobState.VERIFYING, JobState.COMPLETED, JobState.PARTIALLY_COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.QUEUED}, # QUEUED for retry
     JobState.VERIFYING: {JobState.COMPLETED, JobState.FAILED, JobState.PARTIALLY_COMPLETED},
     JobState.PARTIALLY_COMPLETED: {JobState.QUEUED, JobState.FAILED, JobState.COMPLETED},
     JobState.COMPLETED: set(),  # Terminal state

@@ -51,12 +51,13 @@ async def test_agent_journey_youtube_with_audio():
     # 4. Agent starts acquisition
     job_res = await start_acquisition(source_id=source_id, format_id=best_video_audio["format_id"])
     job_id = job_res["job_id"]
-    assert job_res["state"] == "queued"
+    assert job_res["state"] in {"queued", "completed"}
 
-    # 5. Worker processes job in background
-    worker = AcquisitionWorker()
-    processed = await worker.process_next_job(target_job_id=job_id)
-    assert processed is True
+    # 5. Worker processes job in background if queued
+    if job_res["state"] == "queued":
+        worker = AcquisitionWorker()
+        processed = await worker.process_next_job(target_job_id=job_id)
+        assert processed is True
 
     # 6. Agent polls status until completed
     status_res = await get_job_status(job_id=job_id)
@@ -95,9 +96,11 @@ async def test_agent_journey_audio_only_request():
 
     job_res = await start_acquisition(source_id=source_id, format_id=audio_fmt["format_id"])
     job_id = job_res["job_id"]
+    assert job_res["state"] in {"queued", "completed"}
 
-    worker = AcquisitionWorker()
-    await worker.process_next_job(target_job_id=job_id)
+    if job_res["state"] == "queued":
+        worker = AcquisitionWorker()
+        await worker.process_next_job(target_job_id=job_id)
 
     status_res = await get_job_status(job_id=job_id)
     assert status_res["state"] == "completed"

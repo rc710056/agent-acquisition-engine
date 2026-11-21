@@ -25,6 +25,10 @@ KNOWN_PLATFORM_DOMAINS = {
     "vimeo.com": "permitted_media",
     "reddit.com": "permitted_media",
     "v.redd.it": "permitted_media",
+    "imgur.com": "gallery_dl",
+    "deviantart.com": "gallery_dl",
+    "artstation.com": "gallery_dl",
+    "flickr.com": "gallery_dl",
     "instagram.com": "unsupported_restricted",
     "tiktok.com": "unsupported_restricted",
     "twitter.com": "unsupported_restricted",
@@ -229,6 +233,20 @@ class SourceClassifier:
                 acquisition_permission=AcquisitionPermission.PERMITTED,
                 source_access_status=SourceAccessStatus.ACCESSIBLE,
                 mime_type=mime_type,
+                estimated_size_bytes=None,
+                redirect_chain=redirect_chain
+            )
+
+        if platform_id == "gallery_dl":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="gallery_dl",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/zip",
                 estimated_size_bytes=None,
                 redirect_chain=redirect_chain
             )

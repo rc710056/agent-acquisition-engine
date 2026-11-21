@@ -140,6 +140,7 @@ class Artifact(Base):
     sha256 = Column(String(64), nullable=False, index=True)
     storage_path = Column(Text, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
+    origin_cache_key = Column(String(128), nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     user = relationship("User", back_populates="artifacts")

@@ -40,8 +40,8 @@ async def test_youtube_format_presentation_and_audio_inclusion():
 
     # Check resolution presets exist
     fmt_ids = [f.format_id for f in inspection.formats]
-    assert any("720p" in fid for fid in fmt_ids)
-    assert any("audio" in fid for fid in fmt_ids)
+    assert any("p_mp4" in fid for fid in fmt_ids)
+    assert any("audio" in fid or "best_" in fid for fid in fmt_ids)
 
     # Check audio-only preset
     audio_fmts = [f for f in inspection.formats if f.category == "audio_only"]

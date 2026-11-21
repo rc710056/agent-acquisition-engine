@@ -3,6 +3,8 @@ from urllib.parse import urlparse
 from packages.provider_contracts.base import BaseProviderContract
 from providers.pinterest.provider import PinterestProvider
 from providers.permitted_media.provider import PermittedMediaProvider
+from providers.gallery_dl.provider import GalleryDLProvider
+from providers.cobalt.provider import CobaltProvider
 from providers.direct_http.provider import DirectHTTPProvider
 from packages.source_classifier.classifier import SourceClassifier, ClassificationResult
 from packages.shared_schemas.models import SecurityStatus, SourceType
@@ -13,14 +15,18 @@ class ProviderRegistryManager:
     Routes source URLs to the appropriate provider adapter using priority-based resolution:
     1. Specialized Platform Adapters (e.g. Pinterest)
     2. Permitted Media Platforms / Webpages (yt-dlp, video/audio streams)
-    3. Direct HTTP Provider (direct binary/media files only, rejects text/html)
+    3. Gallery & Image Collections (gallery-dl image collections, carousels)
+    4. Cobalt Universal Media Adapter (Anti-bot fallback)
+    5. Direct HTTP Provider (direct binary/media files only, rejects text/html)
     """
 
     def __init__(self):
         self._providers: List[BaseProviderContract] = []
-        # Priority order: Specialized platforms first, then generic media, then direct http
+        # Priority order: Specialized platforms first, then generic media, galleries, cobalt, then direct http
         self.register(PinterestProvider())
         self.register(PermittedMediaProvider())
+        self.register(GalleryDLProvider())
+        self.register(CobaltProvider())
         self.register(DirectHTTPProvider())
 
     def register(self, provider: BaseProviderContract) -> None:

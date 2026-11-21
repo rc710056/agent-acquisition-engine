@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -138,8 +139,37 @@ class AcquisitionWorker:
             if not source:
                 await self._fail_job(job_id, f"Source reference {source_id} not found in database.")
                 return
-            target_url = source.url
+            target_url = source.canonical_url or source.url
             provider_id = source.provider_id
+
+        # 0. Check deduplication cache for existing verified artifact
+        cache_key = hashlib.sha256(f"{target_url}::{format_id}".encode()).hexdigest()
+        async with async_session_factory() as session:
+            stmt = select(Artifact).where(
+                Artifact.origin_cache_key == cache_key,
+                Artifact.is_verified == True
+            ).order_by(Artifact.created_at.desc()).limit(1)
+            cached_art = (await session.execute(stmt)).scalar_one_or_none()
+            if cached_art and storage_service.get_artifact_path(cached_art.storage_path).exists():
+                job_record = await session.get(AcquisitionJob, job_id)
+                if job_record:
+                    validate_state_transition(job_record.state, JobState.VERIFYING)
+                    job_record.state = JobState.VERIFYING.value
+                    validate_state_transition(job_record.state, JobState.COMPLETED)
+                    job_record.state = JobState.COMPLETED.value
+                    job_record.progress_percent = 100.0
+                    job_record.bytes_transferred = cached_art.size_bytes
+                    job_record.total_bytes = cached_art.size_bytes
+                    job_record.current_operation = "Acquisition fulfilled instantly from deduplication cache"
+                    job_record.artifact_id = cached_art.id
+                    session.add(JobEvent(
+                        job_id=job_id,
+                        event_type="completed",
+                        message=f"Artifact {cached_art.filename} served from deduplication cache.",
+                        payload={"cached": True, "artifact_id": cached_art.id}
+                    ))
+                    await session.commit()
+                    return
 
         provider = provider_registry.get_provider(provider_id)
         if not provider:
@@ -236,13 +266,16 @@ class AcquisitionWorker:
                     size_bytes=size_bytes,
                     sha256=sha256_hash,
                     storage_path=perm_path.name,
-                    is_verified=True
+                    is_verified=True,
+                    origin_cache_key=cache_key
                 )
                 session.add(artifact)
                 await session.flush()
 
                 job_record = await session.get(AcquisitionJob, job_id)
                 if job_record:
+                    validate_state_transition(job_record.state, JobState.VERIFYING)
+                    job_record.state = JobState.VERIFYING.value
                     validate_state_transition(job_record.state, JobState.COMPLETED)
                     job_record.state = JobState.COMPLETED.value
                     job_record.progress_percent = 100.0

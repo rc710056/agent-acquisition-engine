@@ -50,6 +50,10 @@ async def init_db() -> None:
                     connection.execute(text("ALTER TABLE source_options ADD COLUMN has_video BOOLEAN"))
                 if "category" not in cols:
                     connection.execute(text("ALTER TABLE source_options ADD COLUMN category VARCHAR(50) DEFAULT 'recommended'"))
+            if "artifacts" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("artifacts")]
+                if "origin_cache_key" not in cols:
+                    connection.execute(text("ALTER TABLE artifacts ADD COLUMN origin_cache_key VARCHAR(128)"))
         await conn.run_sync(_check_and_add_columns)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
