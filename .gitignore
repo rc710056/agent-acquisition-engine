@@ -68,3 +68,6 @@ desktop.ini
 .vscode/
 *.swp
 *.swo
+
+tools/
+
