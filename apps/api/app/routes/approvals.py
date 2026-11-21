@@ -17,16 +17,28 @@ router = APIRouter(prefix="/approvals", tags=["Approvals"])
 class ApprovalDecisionRequest(BaseModel):
     decision: ApprovalStatus # approved or rejected
 
-@router.get("", response_model=list[ApprovalResponse])
+class ApprovalDetailResponse(BaseModel):
+    approval_id: str
+    source_id: str
+    format_id: str
+    status: ApprovalStatus
+    reason: Optional[str] = None
+    estimated_size_bytes: Optional[int] = None
+    created_at: datetime
+
+@router.get("", response_model=list[ApprovalDetailResponse])
 async def list_approvals(db: AsyncSession = Depends(get_db)):
     stmt = select(UserApproval).order_by(UserApproval.created_at.desc()).limit(100)
     res = await db.execute(stmt)
     approvals = res.scalars().all()
     return [
-        ApprovalResponse(
+        ApprovalDetailResponse(
             approval_id=a.id,
+            source_id=a.source_id,
+            format_id=a.format_id,
             status=ApprovalStatus(a.status),
-            message=a.reason or "Approval request",
+            reason=a.reason,
+            estimated_size_bytes=a.estimated_size_bytes,
             created_at=a.created_at
         )
         for a in approvals

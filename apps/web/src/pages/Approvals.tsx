@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { ShieldCheck, Check, X } from 'lucide-react';
 
 interface ApprovalItem {
-  id: string;
-  source_id: string;
-  format_id: string;
+  approval_id?: string;
+  id?: string;
+  source_id?: string;
+  format_id?: string;
   status: string;
-  reason: string;
-  estimated_size_bytes: number | null;
+  reason?: string;
+  estimated_size_bytes?: number | null;
   created_at: string;
 }
 
@@ -73,54 +74,59 @@ export const Approvals: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-3">
-          {approvals.map((appr) => (
-            <div
-              key={appr.id}
-              className="p-4 rounded-xl border border-amoled-border bg-amoled-card/60 flex items-center justify-between shadow-lg"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-semibold text-gray-200">Source: {appr.source_id.slice(0, 12)}...</span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium ${
-                    appr.status === 'approved' ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40' :
-                    appr.status === 'rejected' ? 'bg-red-950/40 text-red-400 border border-red-800/40' :
-                    'bg-amber-950/40 text-amber-400 border border-amber-800/40'
-                  }`}>
-                    {appr.status.toUpperCase()}
-                  </span>
+          {approvals.map((appr) => {
+            const approvalKey = appr.approval_id || appr.id || Math.random().toString();
+            return (
+              <div
+                key={approvalKey}
+                className="p-4 rounded-xl border border-amoled-border bg-amoled-card/60 flex items-center justify-between shadow-lg"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-semibold text-gray-200">
+                      Source: {appr.source_id ? `${appr.source_id.slice(0, 12)}...` : 'Direct Source'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium ${
+                      appr.status === 'approved' ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40' :
+                      appr.status === 'rejected' ? 'bg-red-950/40 text-red-400 border border-red-800/40' :
+                      'bg-amber-950/40 text-amber-400 border border-amber-800/40'
+                    }`}>
+                      {appr.status.toUpperCase()}
+                    </span>
+                  </div>
+                  {appr.reason && <p className="text-xs text-gray-400 font-mono">Reason: {appr.reason}</p>}
+                  <div className="flex items-center space-x-3 text-[10px] text-gray-500 font-mono">
+                    {appr.format_id && <span>Format: {appr.format_id}</span>}
+                    {appr.estimated_size_bytes && (
+                      <span>• Size: {(appr.estimated_size_bytes / 1024 / 1024).toFixed(2)} MB</span>
+                    )}
+                    <span>• Requested: {new Date(appr.created_at).toLocaleTimeString()}</span>
+                  </div>
                 </div>
-                <p className="text-xs text-gray-400 font-mono">Reason: {appr.reason}</p>
-                <div className="flex items-center space-x-3 text-[10px] text-gray-500 font-mono">
-                  <span>Format: {appr.format_id}</span>
-                  {appr.estimated_size_bytes && (
-                    <span>• Size: {(appr.estimated_size_bytes / 1024 / 1024).toFixed(2)} MB</span>
-                  )}
-                  <span>• Requested: {new Date(appr.created_at).toLocaleTimeString()}</span>
-                </div>
-              </div>
 
-              {appr.status === 'pending' && (
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => handleDecision(appr.id, 'rejected')}
-                    disabled={deciding === appr.id}
-                    className="px-3 py-1.5 rounded bg-amoled-input hover:bg-red-950/40 hover:text-red-400 border border-amoled-border text-xs text-gray-400 flex items-center space-x-1 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Reject</span>
-                  </button>
-                  <button
-                    onClick={() => handleDecision(appr.id, 'approved')}
-                    disabled={deciding === appr.id}
-                    className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white flex items-center space-x-1 transition-colors shadow-sm"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Approve</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+                {appr.status === 'pending' && (
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => handleDecision(approvalKey, 'rejected')}
+                      disabled={deciding === approvalKey}
+                      className="px-3 py-1.5 rounded bg-amoled-input hover:bg-red-950/40 hover:text-red-400 border border-amoled-border text-xs text-gray-400 flex items-center space-x-1 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Reject</span>
+                    </button>
+                    <button
+                      onClick={() => handleDecision(approvalKey, 'approved')}
+                      disabled={deciding === approvalKey}
+                      className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white flex items-center space-x-1 transition-colors shadow-sm"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Approve</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
