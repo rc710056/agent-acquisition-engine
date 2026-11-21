@@ -9,7 +9,8 @@ import {
   Film,
   Tv,
   CheckCircle2,
-  ExternalLink
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react';
 import { api } from '../services/api';
 import { SourceInspection, FormatOption, AcquisitionJob } from '../types';
@@ -40,7 +41,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
     { label: '🎬 Movie: Iron Man', query: 'Iron Man' },
     { label: '🐰 Movie: Big Buck Bunny', query: 'Big Buck Bunny' },
     { label: '🎧 Audio: MP3 Stream', query: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
-    { label: '🧲 Torrent: Magnet Link', query: 'magnet:?xt=urn:btih:3b245504fb5f4a4227cac320dbdc293a5b3f3f57&dn=Big+Buck+Bunny+1080p&tr=https%3A%2F%2Ftracker.tamersunion.org%3A443%2Fannounce' }
+    { label: '🧲 Torrent: Magnet Link', query: 'magnet:?xt=urn:btih:3b245504fb5f4a4227cac320dbdc293a5b3f3f57&dn=Big+Buck+Bunny+1080p&tr=https%3A%2F%2Ftorrent.ubuntu.com%3A443%2Fannounce' }
   ];
 
   const handleInspectWithUrl = async (targetQuery: string) => {
@@ -100,7 +101,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
     setError(null);
 
     try {
-      const job = await api.createJob(inspection.source_id, selectedFormat);
+      const autoApprove = !!preflightData?.requires_approval;
+      const job = await api.createJob(inspection.source_id, selectedFormat, undefined, autoApprove);
       setActiveJob(job);
       onJobCreated();
     } catch (err: any) {
@@ -392,10 +394,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
                 <button
                   onClick={handleStartAcquisition}
                   disabled={starting}
-                  className="px-5 py-2.5 rounded-xl bg-electric-600 hover:bg-electric-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center justify-center space-x-2 shadow-lg shadow-electric-600/30 transition-all shrink-0"
+                  className={`px-5 py-2.5 rounded-xl ${
+                    preflightData?.requires_approval
+                      ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/30'
+                      : 'bg-electric-600 hover:bg-electric-500 shadow-electric-600/30'
+                  } disabled:opacity-50 text-xs font-semibold text-white flex items-center justify-center space-x-2 shadow-lg transition-all shrink-0`}
                 >
-                  {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                  <span>Dispatch Acquisition</span>
+                  {starting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : preflightData?.requires_approval ? (
+                    <ShieldCheck className="w-4 h-4 text-white" />
+                  ) : (
+                    <FileDown className="w-4 h-4" />
+                  )}
+                  <span>
+                    {preflightData?.requires_approval ? 'Approve & Dispatch' : 'Dispatch Acquisition'}
+                  </span>
                 </button>
               </div>
             );

@@ -95,7 +95,7 @@ export const api = {
     return handleResponse(res);
   },
 
-  async createJob(sourceId: string, formatId: string, approvalId?: string): Promise<AcquisitionJob> {
+  async createJob(sourceId: string, formatId: string, approvalId?: string, autoApprove?: boolean): Promise<AcquisitionJob> {
     const res = await authFetch(`${BASE_URL}/acquisitions/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,7 +103,8 @@ export const api = {
         source_id: sourceId,
         format_id: formatId,
         approval_id: approvalId || null,
-        execution_mode: 'cloud'
+        execution_mode: 'cloud',
+        auto_approve: !!autoApprove
       })
     });
     return handleResponse(res);

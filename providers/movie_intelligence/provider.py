@@ -255,30 +255,31 @@ class MovieIntelligenceProvider(BaseProviderContract):
             await progress_callback(80, 100)
             await asyncio.sleep(0.05)
 
+        out_file = destination_path
         if format_id == "best_audio_mp3":
             # Produce verified MP3 soundtrack
-            out_file = destination_path.with_suffix(".mp3")
             with open(out_file, "wb") as f:
                 f.write(MP3_SAMPLE_HEADER)
                 # Pad out payload with valid frames
                 f.write(b"\x00" * 32768)
             mime_type = "audio/mp3"
+            final_name = f"{name}_soundtrack.mp3"
         elif format_id == "torrent_magnet":
             # Produce verified BitTorrent ZIP package
-            out_file = destination_path.with_suffix(".zip")
             import zipfile
             with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(f"{name}/MANIFEST.txt", f"BitTorrent Acquisition\nMovie: {insp.title}\nSource: {url}\n")
                 zf.writestr(f"{name}/README.txt", f"Acquired via Agent Acquisition Engine Movie & Torrent Provider.\n")
             mime_type = "application/x-bittorrent"
+            final_name = f"{name}_torrent.zip"
         else:
             # Produce verified synchronized MP4 video
-            out_file = destination_path.with_suffix(".mp4")
             with open(out_file, "wb") as f:
                 f.write(MP4_SAMPLE_HEADER)
                 # Append video/audio frame payloads
                 f.write(b"\x00" * 65536)
             mime_type = "video/mp4"
+            final_name = f"{name}.mp4"
 
         # Compute SHA-256 and size
         sha256 = hashlib.sha256()
@@ -295,9 +296,10 @@ class MovieIntelligenceProvider(BaseProviderContract):
 
         return {
             "file_path": str(out_file),
-            "filename": out_file.name,
+            "filename": final_name,
             "mime_type": mime_type,
             "size_bytes": size_bytes,
+            "total_bytes": size_bytes,
             "sha256": sha256.hexdigest(),
             "verification": verification.to_dict()
         }

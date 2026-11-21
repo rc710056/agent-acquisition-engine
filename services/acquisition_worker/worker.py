@@ -291,8 +291,6 @@ class AcquisitionWorker:
 
                 job_record = await session.get(AcquisitionJob, job_id)
                 if job_record:
-                    validate_state_transition(job_record.state, JobState.VERIFYING)
-                    job_record.state = JobState.VERIFYING.value
                     validate_state_transition(job_record.state, JobState.COMPLETED)
                     job_record.state = JobState.COMPLETED.value
                     job_record.progress_percent = 100.0

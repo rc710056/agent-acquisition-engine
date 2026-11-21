@@ -264,8 +264,8 @@ class TorrentProvider(BaseProviderContract):
         name = insp.title.replace("BitTorrent: ", "") if insp.title else "torrent_payload"
         safe_name = sanitize_filename(name)
 
-        # Write torrent archive payload
-        output_file = destination_path.with_suffix(".zip") if not str(destination_path).endswith(".zip") else destination_path
+        # Write torrent archive payload directly to destination_path
+        output_file = destination_path
 
         import zipfile
         with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -284,7 +284,7 @@ class TorrentProvider(BaseProviderContract):
             await progress_callback(final_size, final_size)
 
         return {
-            "filename": output_file.name,
+            "filename": f"{safe_name}.zip",
             "mime_type": "application/zip",
             "transferred_bytes": final_size,
             "total_bytes": final_size,

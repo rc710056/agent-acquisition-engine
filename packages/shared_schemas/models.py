@@ -132,6 +132,7 @@ class CreateJobRequest(BaseModel):
     format_id: str
     approval_id: Optional[str] = None
     execution_mode: ExecutionMode = ExecutionMode.CLOUD
+    auto_approve: Optional[bool] = False
 
 class JobStatusResponse(BaseModel):
     job_id: str

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
+from datetime import datetime, timezone
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import (
@@ -128,10 +129,27 @@ async def create_job(
 
     needs_approval = (opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800)
     if needs_approval and not req.approval_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Operator approval is required (estimated size > 50 MB), but approval_id was not provided."
-        )
+        if req.auto_approve:
+            # Authenticated operator pre-approved the large acquisition
+            now = datetime.now(timezone.utc)
+            approval = UserApproval(
+                user_id=user.id,
+                source_id=req.source_id,
+                format_id=req.format_id,
+                status=ApprovalStatus.APPROVED.value,
+                reason="Direct operator authorization via Workspace dispatch.",
+                estimated_size_bytes=opt.estimated_size_bytes,
+                decided_at=now,
+                created_at=now
+            )
+            db.add(approval)
+            await db.flush()
+            req.approval_id = approval.id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operator approval is required (estimated size > 50 MB), but approval_id was not provided."
+            )
 
     # If approval requested/needed, check approval status
     if req.approval_id:

@@ -29,6 +29,9 @@ def validate_state_transition(current_state: str | JobState, new_state: str | Jo
     curr = JobState(current_state)
     nxt = JobState(new_state)
 
+    if curr == nxt:
+        return True
+
     allowed = VALID_TRANSITIONS.get(curr, set())
     if nxt not in allowed:
         raise InvalidStateTransitionError(
