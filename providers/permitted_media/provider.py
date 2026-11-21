@@ -347,7 +347,7 @@ class PermittedMediaProvider(BaseProviderContract):
 
             # Determine yt-dlp format selector
             postprocessors = None
-            if target_format.file_type == "audio" or "audio" in format_id:
+            if target_format.file_type == "audio":
                 fmt_spec = "bestaudio/best"
                 ext = "m4a" if "m4a" in format_id else ("mp3" if "mp3" in format_id else "m4a")
                 postprocessors = [{

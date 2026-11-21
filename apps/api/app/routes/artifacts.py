@@ -14,6 +14,15 @@ from apps.api.app.config import settings
 
 router = APIRouter(tags=["Artifacts"])
 
+def _get_request_base_url(request: Request) -> str:
+    origin = request.headers.get("origin") or request.headers.get("x-forwarded-host")
+    if origin:
+        proto = request.headers.get("x-forwarded-proto", "https" if "trycloudflare" in origin else "http")
+        return f"{proto}://{origin}".rstrip("/") if "://" not in origin else origin.rstrip("/")
+    if request.base_url:
+        return str(request.base_url).rstrip("/")
+    return settings.API_BASE_URL.rstrip("/")
+
 @router.get("/artifacts", response_model=List[ArtifactMetadata])
 async def list_artifacts(
     request: Request,
@@ -27,9 +36,10 @@ async def list_artifacts(
     res = await db.execute(stmt)
     artifacts = res.scalars().all()
 
+    req_base = _get_request_base_url(request)
     result = []
     for art in artifacts:
-        dl_url, exp_time = storage_service.generate_delivery_url(art.id)
+        dl_url, exp_time = storage_service.generate_delivery_url(art.id, base_url=req_base)
         result.append(ArtifactMetadata(
             artifact_id=art.id,
             filename=art.filename,
@@ -53,7 +63,8 @@ async def get_artifact(
     if not art or not art.is_verified or (not is_admin_request(request, user) and art.user_id != user.id):
         raise HTTPException(status_code=404, detail="Artifact not found.")
 
-    dl_url, exp_time = storage_service.generate_delivery_url(art.id)
+    req_base = _get_request_base_url(request)
+    dl_url, exp_time = storage_service.generate_delivery_url(art.id, base_url=req_base)
     return ArtifactMetadata(
         artifact_id=art.id,
         filename=art.filename,
