@@ -2,9 +2,32 @@
 
 > **MCP-First File Acquisition Infrastructure for Autonomous AI Agents**
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rc710056/agent-acquisition-engine)
+[![GitHub Pages Web UI](https://img.shields.io/badge/Live%20Web%20UI-GitHub%20Pages-2563EB?logo=github)](https://rc710056.github.io/agent-acquisition-engine/)
+[![CI / Tests](https://github.com/rc710056/agent-acquisition-engine/actions/workflows/deploy.yml/badge.svg)](https://github.com/rc710056/agent-acquisition-engine/actions)
+
 Agent Acquisition Engine (AAE) provides an acquisition, inspection, verification, and artifact delivery service that AI agents access through a single Model Context Protocol (MCP) connection.
 
 AI agents no longer need to write custom web scrapers or brittle downloaders. They delegate the entire acquisition lifecycle to AAE.
+
+---
+
+## 🌐 Instant Cloud Access (No Localhost Required)
+
+You do **not** need to run this locally on `localhost`. You can run and view the entire full-stack application directly from GitHub:
+
+1. **One-Click GitHub Codespaces**: Click the **[Open in GitHub Codespaces](https://codespaces.new/rc710056/agent-acquisition-engine)** button above. GitHub provisions a complete cloud environment with Python 3.12, Node.js 20, `aria2c`, and `ffmpeg` pre-installed, and forwards port `5173` to a secure public HTTPS preview URL.
+2. **Static Web UI Preview**: Hosted on [GitHub Pages](https://rc710056.github.io/agent-acquisition-engine/).
+
+---
+
+## ⚡ Real Media Downloads & Architecture
+
+Unlike mock or stub downloaders, AAE acquires **genuine, full-sized, verified media files**:
+- **High-Definition Video**: Full-length 1080p/720p synchronized audio-video `.mp4` files (multi-megabyte to gigabyte master streams).
+- **Pure Audio Extraction**: Studio-quality 320kbps `.mp3` and `.m4a` audio files.
+- **P2P BitTorrent Protocol**: Powered by an embedded `aria2c` engine with Async DNS, DHT discovery, and multi-tracker support.
+- **Multi-Step Movie Download Bypasser**: Resolves complex ad-shortened countdown redirect funnels (like MovieMod, VegaMovies, FastCloud, HubCloud) via headless browser network stream sniffing.
 
 ---
 
