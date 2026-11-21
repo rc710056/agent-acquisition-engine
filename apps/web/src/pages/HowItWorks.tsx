@@ -26,12 +26,13 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ userProfile, onNavigateT
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedMcp, setCopiedMcp] = useState(false);
 
-  const personalLink = userProfile?.dashboard_url || 'http://localhost:5173/portal?token=YOUR_PERSONAL_TOKEN';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000';
+  const personalLink = userProfile?.dashboard_url || `${origin}/portal?token=YOUR_PERSONAL_TOKEN`;
 
   const mcpConfig = {
     mcpServers: {
-      "agent-acquisition-engine": {
-        url: "http://127.0.0.1:8000/mcp/sse",
+      "acquisition-engine": {
+        url: `${origin}/mcp/sse`,
         headers: {
           Authorization: `Bearer ${userProfile?.portal_token || 'YOUR_PERSONAL_TOKEN'}`
         }
@@ -148,7 +149,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ userProfile, onNavigateT
       icon: Cpu,
       color: "indigo",
       description:
-        "Any AI agent (Claude Desktop, Cursor, Antigravity, Open-WebUI, AutoGen, CrewAI) can connect directly to your personal workspace using the Model Context Protocol (MCP) or REST API.",
+        "Any AI agent (Claude Desktop, Cursor, OpenAI Operator, Windsurf, Open-WebUI, AutoGen, CrewAI) can connect directly to your personal workspace using the Model Context Protocol (MCP) or REST API.",
       details: [
         "Real-time Server-Sent Events (SSE) remote transport at /mcp/sse.",
         "Your unique personal link lets you monitor what your agents are downloading in real time.",

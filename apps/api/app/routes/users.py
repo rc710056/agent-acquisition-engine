@@ -1,9 +1,10 @@
 import secrets
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from apps.api.app.models.database import get_db
 from apps.api.app.models.entities import User, AcquisitionJob, Artifact, UserApproval
@@ -34,12 +35,21 @@ class PortalLinkResponse(BaseModel):
     dashboard_url: str
     created: bool
 
-def _format_dashboard_url(portal_token: str) -> str:
-    # Default to standard frontend dashboard URL
-    return f"http://localhost:5173/portal?token={portal_token}"
+def _format_dashboard_url(portal_token: str, request: Optional[Request] = None) -> str:
+    base = settings.FRONTEND_URL.rstrip('/')
+    if request:
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        if origin:
+            parsed = urlparse(origin)
+            if parsed.scheme and parsed.netloc:
+                base = f"{parsed.scheme}://{parsed.netloc}"
+        elif request.base_url:
+            base = str(request.base_url).rstrip('/')
+    return f"{base}/portal?token={portal_token}"
 
 @router.get("/me", response_model=UserProfileResponse)
 async def get_my_profile(
+    request: Request,
     user: User = Depends(get_authenticated_portal_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -89,7 +99,7 @@ async def get_my_profile(
         email=user.email,
         role=user.role,
         portal_token=user.portal_token,
-        dashboard_url=_format_dashboard_url(user.portal_token),
+        dashboard_url=_format_dashboard_url(user.portal_token, request),
         active_jobs_count=active_jobs_count,
         artifacts_count=artifacts_count,
         pending_approvals_count=pending_approvals_count
@@ -97,6 +107,7 @@ async def get_my_profile(
 
 @router.post("/portal-link", response_model=PortalLinkResponse)
 async def get_or_create_portal_link(
+    request: Request,
     req: Optional[PortalLinkRequest] = None,
     db: AsyncSession = Depends(get_db),
     authenticated_user: User = Depends(get_authenticated_portal_user)
@@ -140,7 +151,7 @@ async def get_or_create_portal_link(
             await db.refresh(user)
     else:
         # Provision fresh dedicated workspace user
-        new_email = f"user_{secrets.token_hex(4)}@antigravity.internal"
+        new_email = f"user_{secrets.token_hex(4)}@{settings.USER_DOMAIN}"
         user = User(
             email=new_email,
             hashed_password=f"auto_{secrets.token_hex(16)}",
@@ -156,6 +167,6 @@ async def get_or_create_portal_link(
         user_id=user.id,
         email=user.email,
         portal_token=user.portal_token,
-        dashboard_url=_format_dashboard_url(user.portal_token),
+        dashboard_url=_format_dashboard_url(user.portal_token, request),
         created=created
     )

@@ -94,7 +94,7 @@ async def get_authenticated_user_or_agent(
     user = res.scalar_one_or_none()
     if not user:
         user = User(
-            email="operator@antigravity.internal",
+            email="operator@engine.io",
             hashed_password="local_operator_hash",
             role="admin",
             portal_token=f"aae_usr_{secrets.token_hex(20)}"

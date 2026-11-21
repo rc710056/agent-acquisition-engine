@@ -113,7 +113,7 @@ async def _get_default_user_id(session) -> str:
     user = res.scalar_one_or_none()
     if not user:
         user = User(
-            email="agent@antigravity.internal",
+            email="agent@engine.io",
             hashed_password="default_hash",
             role="agent",
             portal_token=f"aae_usr_{secrets.token_hex(20)}"

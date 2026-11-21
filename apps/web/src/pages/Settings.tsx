@@ -87,8 +87,8 @@ export const Settings: React.FC = () => {
               </div>
             </div>
             <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
-              <span className="text-gray-500 text-[10px] uppercase font-mono">CORS Allowed Origins</span>
-              <p className="mt-1 font-mono text-gray-200">http://localhost:5173, http://127.0.0.1:5173</p>
+              <span className="text-gray-500 text-[10px] uppercase font-mono">CORS & Host Allowed Origins</span>
+              <p className="mt-1 font-mono text-gray-200">Dynamic Origin ({typeof window !== 'undefined' ? window.location.host : 'engine.io'})</p>
             </div>
           </div>
         </div>
@@ -100,13 +100,13 @@ export const Settings: React.FC = () => {
             <span>MCP TOOL SERVERS (MODEL CONTEXT PROTOCOL)</span>
           </div>
           <p className="text-[11px] text-gray-400 leading-relaxed">
-            Autonomous AI agents interface directly with the engine through 8 registered MCP tools over Server-Sent Events (SSE) or Stdio transports.
+            Autonomous AI agents interface directly with the engine through registered MCP tools over Server-Sent Events (SSE) or Stdio transports.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
               <span className="text-gray-500 text-[10px] uppercase font-mono">Remote SSE Transport URL</span>
-              <p className="mt-1 font-mono text-electric-400">http://127.0.0.1:8000/mcp/sse</p>
+              <p className="mt-1 font-mono text-electric-400">{typeof window !== 'undefined' ? `${window.location.origin}/mcp/sse` : '/mcp/sse'}</p>
             </div>
             <div className="p-3 rounded-lg bg-amoled-input border border-amoled-border">
               <span className="text-gray-500 text-[10px] uppercase font-mono">Local Stdio Server Module</span>

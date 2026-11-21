@@ -33,7 +33,7 @@ async def get_or_create_default_user(db: AsyncSession) -> User:
     res = await db.execute(stmt)
     u = res.scalar_one_or_none()
     if not u:
-        u = User(email="operator@antigravity.internal", hashed_password="default_pwd_hash", role="admin")
+        u = User(email="operator@engine.io", hashed_password="default_pwd_hash", role="admin")
         db.add(u)
         await db.flush()
     return u

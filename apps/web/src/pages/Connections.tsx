@@ -59,21 +59,28 @@ export const Connections: React.FC = () => {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000';
+
   const stdioConfig = `{
   "mcpServers": {
-    "agent-acquisition-engine": {
-      "command": "C:\\\\Users\\\\ROHIT\\\\.gemini\\\\antigravity\\\\scratch\\\\agent-acquisition-engine\\\\.venv\\\\Scripts\\\\python.exe",
+    "acquisition-engine": {
+      "command": "python",
       "args": ["-m", "services.mcp_server.server"],
-      "cwd": "C:\\\\Users\\\\ROHIT\\\\.gemini\\\\antigravity\\\\scratch\\\\agent-acquisition-engine"
+      "env": {
+        "AAE_API_KEY": "${newKey || '<YOUR_GENERATED_API_KEY>'}"
+      }
     }
   }
 }`;
 
   const sseConfig = `{
   "mcpServers": {
-    "agent-acquisition-engine": {
-      "url": "http://127.0.0.1:8000/mcp/sse",
-      "transport": "sse"
+    "acquisition-engine": {
+      "url": "${origin}/mcp/sse",
+      "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer ${newKey || '<YOUR_GENERATED_API_KEY>'}"
+      }
     }
   }
 }`;
@@ -135,7 +142,7 @@ export const Connections: React.FC = () => {
           </div>
           <div className="p-2 rounded bg-amoled-input/80 border border-amoled-border flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span><strong>Antigravity / Gemini</strong></span>
+            <span><strong>OpenAI Operator</strong> (ChatGPT)</span>
           </div>
           <div className="p-2 rounded bg-amoled-input/80 border border-amoled-border flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>

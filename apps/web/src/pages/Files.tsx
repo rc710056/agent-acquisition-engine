@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FileCheck, Download, ShieldCheck, Copy, Check } from 'lucide-react';
+import { FileCheck, Download, ShieldCheck, Copy, Check, Play, Pause, Volume2 } from 'lucide-react';
 import { api } from '../services/api';
 import { Artifact } from '../types';
 
@@ -7,6 +7,7 @@ export const Files: React.FC = () => {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
 
   const fetchArtifacts = async () => {
     try {
@@ -27,6 +28,25 @@ export const Files: React.FC = () => {
     navigator.clipboard.writeText(sha);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const isPlayable = (mime: string, filename: string) => {
+    const m = (mime || '').toLowerCase();
+    const f = (filename || '').toLowerCase();
+    return (
+      m.includes('audio') ||
+      m.includes('video') ||
+      f.endsWith('.mp3') ||
+      f.endsWith('.mp4') ||
+      f.endsWith('.m4a') ||
+      f.endsWith('.webm')
+    );
+  };
+
+  const isVideo = (mime: string, filename: string) => {
+    const m = (mime || '').toLowerCase();
+    const f = (filename || '').toLowerCase();
+    return m.includes('video') || f.endsWith('.mp4') || f.endsWith('.webm');
   };
 
   return (
@@ -85,18 +105,65 @@ export const Files: React.FC = () => {
                 </button>
               </div>
 
+              {/* In-Browser Media Preview Stream */}
+              {previewingId === art.artifact_id && (
+                <div className="p-2.5 rounded-lg bg-amoled-input border border-electric-500/30 animate-in fade-in duration-200">
+                  {isVideo(art.mime_type, art.filename) ? (
+                    <video
+                      controls
+                      autoPlay
+                      playsInline
+                      className="w-full max-h-48 rounded bg-black object-contain border border-amoled-border"
+                      src={art.download_url}
+                    >
+                      Your browser does not support the video tag.
+                    </video>
+                  ) : (
+                    <div className="flex flex-col space-y-1.5 py-1">
+                      <div className="flex items-center space-x-2 text-[11px] text-electric-400 font-mono">
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Streaming Audio Preview</span>
+                      </div>
+                      <audio controls autoPlay className="w-full h-8" src={art.download_url}>
+                        Your browser does not support the audio element.
+                      </audio>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Action Bar */}
               <div className="pt-2 border-t border-amoled-border flex items-center justify-between gap-2">
-                <span className="text-[10px] text-gray-500 font-mono truncate">
-                  Link expires {new Date(art.expires_at).toLocaleTimeString()}
-                </span>
+                <div className="flex items-center space-x-2 min-w-0">
+                  <span className="text-[10px] text-gray-500 font-mono truncate">
+                    Expires {new Date(art.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {isPlayable(art.mime_type, art.filename) && (
+                    <button
+                      onClick={() => setPreviewingId(previewingId === art.artifact_id ? null : art.artifact_id)}
+                      className="px-2 py-1 rounded bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-[10px] text-gray-300 hover:text-white flex items-center space-x-1 transition-colors"
+                    >
+                      {previewingId === art.artifact_id ? (
+                        <>
+                          <Pause className="w-3 h-3 text-amber-400" />
+                          <span>Close</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3 h-3 text-electric-400" />
+                          <span>Preview</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
                 <a
                   href={art.download_url}
                   download={art.filename}
                   className="px-3 py-1.5 rounded bg-electric-600 hover:bg-electric-500 text-xs font-medium text-white flex items-center space-x-1.5 transition-colors shadow-sm shrink-0"
                 >
                   <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span>Download Artifact</span>
+                  <span>Download</span>
                 </a>
               </div>
             </div>

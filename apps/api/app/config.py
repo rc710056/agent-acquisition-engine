@@ -9,10 +9,12 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     SECRET_KEY: str = "aae-development-only-secret-key"
 
-    API_HOST: str = "127.0.0.1"
+    API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     API_BASE_URL: str = "http://127.0.0.1:8000"
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    FRONTEND_URL: str = "http://127.0.0.1:5173"
+    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"]
+    USER_DOMAIN: str = "engine.io"
 
     MCP_HOST: str = "127.0.0.1"
     MCP_PORT: int = 8001

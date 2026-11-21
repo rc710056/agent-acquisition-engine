@@ -239,6 +239,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
   const quickSamples = [
     { label: '👻 Movie: Talk to Me', query: 'Talk to Me' },
     { label: '🎬 Movie: Iron Man', query: 'Iron Man' },
+    { label: '🏜️ Movie: Dune', query: 'Dune: Part Two' },
+    { label: '💥 Movie: Oppenheimer', query: 'Oppenheimer' },
     { label: '🐰 Movie: Big Buck Bunny', query: 'Big Buck Bunny' },
     { label: '🎧 Audio: MP3 Stream', query: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
     { label: '🧲 Torrent: Magnet Link', query: 'magnet:?xt=urn:btih:3b245504fb5f4a4227cac320dbdc293a5b3f3f57&dn=Big+Buck+Bunny+1080p&tr=https%3A%2F%2Ftorrent.ubuntu.com%3A443%2Fannounce' }
@@ -390,14 +392,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
         </div>
       </div>
 
-      {/* Error Banner */}
+      {/* Error Banner with Smart Fallback */}
       {error && (
-        <div className="p-4 rounded-xl bg-red-950/30 border border-red-800/40 text-red-300 text-xs flex items-start space-x-2.5">
-          <ShieldAlert className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
-          <div>
-            <p className="font-medium">Acquisition Request Blocked or Failed</p>
-            <p className="text-red-400/90 mt-0.5">{error}</p>
+        <div className="p-4 rounded-xl bg-red-950/30 border border-red-800/40 text-red-300 text-xs flex items-start justify-between space-x-2.5">
+          <div className="flex items-start space-x-2.5">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+            <div>
+              <p className="font-medium">Acquisition Request Blocked or Encountered Issue</p>
+              <p className="text-red-400/90 mt-0.5">{error}</p>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={() => handleInspectWithUrl('Big Buck Bunny')}
+            className="shrink-0 px-2.5 py-1 rounded bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-[11px] text-gray-300 hover:text-white transition-colors"
+          >
+            Try Verified Mirror
+          </button>
         </div>
       )}
 
