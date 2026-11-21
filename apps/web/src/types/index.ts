@@ -71,6 +71,8 @@ export interface ProviderInfo {
   status: string;
   supported_schemes: string[];
   capabilities: string[];
+  max_file_size?: string;
+  description?: string;
 }
 
 export interface UserProfile {

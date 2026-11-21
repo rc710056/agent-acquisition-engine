@@ -74,7 +74,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                 </div>
                 <div className="min-w-0">
                   <div className="text-[11px] font-medium text-gray-200 truncate">
-                    {userProfile.email.split('@')[0]}
+                    {(userProfile.email || '').replace('@antigravity.internal', '@engine.io').split('@')[0]}
                   </div>
                   <div className="text-[9px] font-mono text-emerald-400">
                     {userProfile.role.toUpperCase()}

@@ -153,7 +153,7 @@ export const App: React.FC = () => {
                 PERSONAL WORKSPACE
               </span>
               <span className="text-gray-300 font-medium">
-                {userProfile.email}
+                {(userProfile.email || '').replace('@antigravity.internal', '@engine.io')}
               </span>
               <span className="text-gray-500">•</span>
               <span className="text-gray-400">
