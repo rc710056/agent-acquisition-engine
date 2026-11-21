@@ -94,6 +94,7 @@ class AcquisitionJob(Base):
     total_bytes = Column(BigInteger, nullable=True)
     retry_count = Column(Integer, default=0, nullable=False)
     max_retries = Column(Integer, default=3, nullable=False)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
     current_operation = Column(String(100), default="Job initialized", nullable=False)
     error_message = Column(Text, nullable=True)
     artifact_id = Column(String(36), ForeignKey("artifacts.id"), nullable=True)

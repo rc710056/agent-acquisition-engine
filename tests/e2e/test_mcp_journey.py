@@ -108,7 +108,7 @@ async def test_full_mcp_acquisition_journey(e2e_port, monkeypatch):
 
     # Step 5: Worker executes acquisition in background
     worker = AcquisitionWorker()
-    processed = await worker.process_next_job()
+    processed = await worker.process_next_job(target_job_id=job_id)
     assert processed is True
 
     # Step 6: Agent checks job status

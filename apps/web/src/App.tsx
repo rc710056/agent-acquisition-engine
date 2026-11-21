@@ -3,6 +3,7 @@ import { Navigation } from './components/Navigation';
 import { Workspace } from './pages/Workspace';
 import { Jobs } from './pages/Jobs';
 import { Files } from './pages/Files';
+import { Approvals } from './pages/Approvals';
 import { Connections } from './pages/Connections';
 import { Providers } from './pages/Providers';
 import { Settings } from './pages/Settings';
@@ -29,6 +30,7 @@ export const App: React.FC = () => {
         {activeTab === 'workspace' && <Workspace onJobCreated={() => setActiveTab('jobs')} />}
         {activeTab === 'jobs' && <Jobs />}
         {activeTab === 'files' && <Files />}
+        {activeTab === 'approvals' && <Approvals />}
         {activeTab === 'connections' && <Connections />}
         {activeTab === 'providers' && <Providers />}
         {activeTab === 'settings' && <Settings />}

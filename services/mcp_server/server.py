@@ -183,13 +183,28 @@ async def preflight_acquisition(source_id: str, format_id: str, execution_mode: 
             requires_approval = True
             approval_reason = f"File size ({opt.estimated_size_bytes} bytes) exceeds 50 MB threshold. Operator approval required."
 
+        # Duplicate artifact detection
+        stmt_dup = (
+            select(Artifact)
+            .join(AcquisitionJob, AcquisitionJob.artifact_id == Artifact.id)
+            .where(
+                AcquisitionJob.source_id == source_id,
+                AcquisitionJob.format_id == format_id,
+                AcquisitionJob.state == JobState.COMPLETED.value,
+                Artifact.is_verified == True
+            )
+            .limit(1)
+        )
+        dup_res = await session.execute(stmt_dup)
+        duplicate_art = dup_res.scalar_one_or_none()
+
     return {
         "can_acquire": True,
         "requires_approval": requires_approval,
         "approval_reason": approval_reason,
         "estimated_size_bytes": opt.estimated_size_bytes,
         "storage_available": True,
-        "duplicate_artifact_id": None
+        "duplicate_artifact_id": duplicate_art.id if duplicate_art else None
     }
 
 # =====================================================================
@@ -237,7 +252,28 @@ async def start_acquisition(source_id: str, format_id: str, approval_id: Optiona
         if not source:
             return {"error": f"Source ID '{source_id}' not found."}
 
-        if approval_id:
+        stmt_opt = select(SourceOption).where(
+            SourceOption.source_id == source_id,
+            SourceOption.format_id == format_id
+        )
+        res_opt = await session.execute(stmt_opt)
+        opt = res_opt.scalar_one_or_none()
+        if not opt:
+            return {"error": f"Format ID '{format_id}' is not available for source."}
+
+        # Enforce approval if required
+        needs_approval = (opt.estimated_size_bytes and opt.estimated_size_bytes > 52_428_800)
+        if needs_approval:
+            if not approval_id:
+                return {
+                    "error": "Operator approval is required for this acquisition (file size exceeds 50 MB threshold), but no approval_id was provided. Call request_approval first."
+                }
+            approval = await session.get(UserApproval, approval_id)
+            if not approval or approval.status != ApprovalStatus.APPROVED.value:
+                return {
+                    "error": f"Specified approval ID '{approval_id}' is not approved (status: {approval.status if approval else 'missing'})."
+                }
+        elif approval_id:
             approval = await session.get(UserApproval, approval_id)
             if not approval or approval.status != ApprovalStatus.APPROVED.value:
                 return {

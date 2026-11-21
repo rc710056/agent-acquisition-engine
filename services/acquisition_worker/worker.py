@@ -1,10 +1,14 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+
+class AcquisitionCancelledError(Exception):
+    """Raised when an in-flight acquisition is aborted by operator or system request."""
+    pass
 
 from apps.api.app.config import settings
 from apps.api.app.models.database import async_session_factory, init_db
@@ -82,15 +86,23 @@ class AcquisitionWorker:
                     ))
             await session.commit()
 
-    async def process_next_job(self) -> bool:
-        """Pulls and executes the oldest QUEUED job."""
+    async def process_next_job(self, target_job_id: Optional[str] = None) -> bool:
+        """Pulls and executes the oldest eligible QUEUED job whose retry delay has elapsed."""
+        now_utc = datetime.now(timezone.utc)
         async with async_session_factory() as session:
-            stmt = (
-                select(AcquisitionJob)
-                .where(AcquisitionJob.state == JobState.QUEUED.value)
-                .order_by(AcquisitionJob.created_at.asc())
-                .limit(1)
+            stmt = select(AcquisitionJob).where(
+                AcquisitionJob.state == JobState.QUEUED.value,
+                or_(
+                    AcquisitionJob.next_retry_at == None,
+                    AcquisitionJob.next_retry_at <= now_utc
+                )
             )
+            if target_job_id:
+                stmt = stmt.where(AcquisitionJob.id == target_job_id)
+            else:
+                stmt = stmt.order_by(AcquisitionJob.created_at.asc())
+
+            stmt = stmt.limit(1)
             result = await session.execute(stmt)
             job = result.scalar_one_or_none()
 
@@ -105,6 +117,7 @@ class AcquisitionWorker:
             # Transition to DOWNLOADING
             validate_state_transition(job.state, JobState.DOWNLOADING)
             job.state = JobState.DOWNLOADING.value
+            job.next_retry_at = None
             job.current_operation = "Connecting to source stream"
             session.add(JobEvent(
                 job_id=job_id,
@@ -142,12 +155,16 @@ class AcquisitionWorker:
             nonlocal last_progress_time
             import time
             now = time.time()
-            if now - last_progress_time < 0.5:
+            if now - last_progress_time < 0.4:
                 return  # Throttle DB writes
             last_progress_time = now
 
             pct = round((transferred / total) * 100, 2) if total and total > 0 else 0.0
             async with async_session_factory() as s:
+                curr_job = await s.get(AcquisitionJob, job_id)
+                if curr_job and curr_job.state == JobState.CANCELLED.value:
+                    raise AcquisitionCancelledError(f"Acquisition for job {job_id} was aborted by operator cancellation.")
+
                 await s.execute(
                     update(AcquisitionJob)
                     .where(AcquisitionJob.id == job_id)
@@ -250,6 +267,16 @@ class AcquisitionWorker:
                 await session.commit()
                 logger.info(f"Job {job_id} successfully completed. Artifact: {artifact.id}")
 
+        except AcquisitionCancelledError as e:
+            temp_destination.unlink(missing_ok=True)
+            logger.info(f"Job {job_id} cancellation acknowledged during stream.")
+            async with async_session_factory() as session:
+                session.add(JobEvent(
+                    job_id=job_id,
+                    event_type="cancelled",
+                    message="Download stream terminated upon operator cancellation."
+                ))
+                await session.commit()
         except Exception as e:
             temp_destination.unlink(missing_ok=True)
             logger.error(f"Error acquiring job {job_id}: {str(e)}", exc_info=True)
@@ -264,11 +291,14 @@ class AcquisitionWorker:
             if job.retry_count < job.max_retries:
                 job.retry_count += 1
                 job.state = JobState.QUEUED.value
-                job.current_operation = f"Retrying after error (attempt #{job.retry_count}): {error_message}"
+                # Exponential backoff: backoff_factor ^ retry_count seconds
+                backoff_seconds = float(settings.RETRY_BACKOFF_FACTOR ** job.retry_count)
+                job.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)
+                job.current_operation = f"Retrying in {backoff_seconds:.1f}s (attempt #{job.retry_count}/{job.max_retries}): {error_message}"
                 session.add(JobEvent(
                     job_id=job_id,
                     event_type="retry",
-                    message=f"Retry #{job.retry_count} scheduled. Cause: {error_message}"
+                    message=f"Retry #{job.retry_count} scheduled with {backoff_seconds:.1f}s backoff. Cause: {error_message}"
                 ))
             else:
                 job.state = JobState.FAILED.value
@@ -277,7 +307,7 @@ class AcquisitionWorker:
                 session.add(JobEvent(
                     job_id=job_id,
                     event_type="failure",
-                    message=f"Job permanently failed: {error_message}"
+                    message=f"Job permanently failed after {job.max_retries} attempts: {error_message}"
                 ))
             await session.commit()
 

@@ -130,8 +130,8 @@ class FileVerifier:
                 if ext == "tar" and len(header) >= 262 and header[257:262] == b"ustar":
                     pass
                 else:
-                    warnings.append(
-                        f"File header signature does not match expected pattern for .{ext} files."
+                    errors.append(
+                        f"File header signature mismatch for .{ext} file. Expected {sig[:8]!r}, got {header[:8]!r}."
                     )
 
         # 6. Archive integrity test

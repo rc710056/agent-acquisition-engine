@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, ArrowRight, ShieldAlert, CheckCircle2, Loader2, FileDown } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, ArrowRight, ShieldAlert, Loader2, FileDown, AlertTriangle } from 'lucide-react';
 import { api } from '../services/api';
 import { SourceInspection, FormatOption, AcquisitionJob } from '../types';
 
@@ -9,6 +9,13 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
   const [inspection, setInspection] = useState<SourceInspection | null>(null);
   const [formats, setFormats] = useState<FormatOption[]>([]);
   const [selectedFormat, setSelectedFormat] = useState<string>('original');
+  const [preflightData, setPreflightData] = useState<{
+    can_acquire: boolean;
+    requires_approval: boolean;
+    approval_reason: string | null;
+    estimated_size_bytes: number | null;
+    duplicate_artifact_id?: string | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [activeJob, setActiveJob] = useState<AcquisitionJob | null>(null);
@@ -21,6 +28,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
     setError(null);
     setInspection(null);
     setFormats([]);
+    setPreflightData(null);
 
     try {
       const res = await api.inspectSource(url.trim());
@@ -30,6 +38,8 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
         setFormats(fmts);
         if (fmts.length > 0) {
           setSelectedFormat(fmts[0].format_id);
+          const pf = await api.preflight(res.source_id, fmts[0].format_id);
+          setPreflightData(pf);
         }
       } else if (res.errors.length > 0) {
         setError(res.errors.join('; '));
@@ -38,6 +48,18 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
       setError(err.message || 'Inspection failed');
     } finally {
       setInspecting(false);
+    }
+  };
+
+  const handleFormatChange = async (fmtId: string) => {
+    setSelectedFormat(fmtId);
+    if (inspection) {
+      try {
+        const pf = await api.preflight(inspection.source_id, fmtId);
+        setPreflightData(pf);
+      } catch (err: any) {
+        console.error('Preflight check failed', err);
+      }
     }
   };
 
@@ -56,6 +78,22 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
       setStarting(false);
     }
   };
+
+  // Poll active job status if present
+  useEffect(() => {
+    if (!activeJob || ['completed', 'failed', 'cancelled'].includes(activeJob.state)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const updated = await api.getJob(activeJob.job_id);
+        setActiveJob(updated);
+      } catch (e) {
+        console.error('Failed to poll active job', e);
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [activeJob]);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -149,6 +187,14 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
             </div>
           </div>
 
+          {/* Preflight Advice Banner */}
+          {preflightData?.requires_approval && (
+            <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-800/40 text-amber-300 text-xs flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{preflightData.approval_reason}</span>
+            </div>
+          )}
+
           {/* Format Selection & Launch */}
           {inspection.is_permitted && formats.length > 0 && (
             <div className="pt-2 border-t border-amoled-border flex items-center justify-between">
@@ -156,7 +202,7 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
                 <span className="text-xs text-gray-400">Target Format:</span>
                 <select
                   value={selectedFormat}
-                  onChange={(e) => setSelectedFormat(e.target.value)}
+                  onChange={(e) => handleFormatChange(e.target.value)}
                   className="bg-amoled-input border border-amoled-border text-xs text-gray-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-electric-500"
                 >
                   {formats.map((f) => (
@@ -180,19 +226,30 @@ export const Workspace: React.FC<{ onJobCreated: () => void }> = ({ onJobCreated
         </div>
       )}
 
-      {/* Active Job Alert */}
+      {/* Active Job Progress in Workspace */}
       {activeJob && (
-        <div className="p-4 rounded-xl border border-electric-500/30 bg-electric-600/10 flex items-center justify-between text-xs">
-          <div className="flex items-center space-x-3">
-            <CheckCircle2 className="w-5 h-5 text-electric-400 shrink-0" />
-            <div>
-              <p className="font-semibold text-gray-100">Acquisition Job Dispatched Successfully</p>
-              <p className="text-gray-400 mt-0.5 font-mono text-[11px]">
-                Job ID: {activeJob.job_id} • Status: {activeJob.state}
-              </p>
+        <div className="p-4 rounded-xl border border-electric-500/30 bg-electric-600/10 space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span className={`w-2 h-2 rounded-full ${activeJob.state === 'completed' ? 'bg-emerald-500' : 'bg-electric-400 animate-pulse'}`} />
+              <span className="font-semibold text-gray-100">
+                Job {activeJob.job_id.slice(0, 12)}: {activeJob.state.toUpperCase()}
+              </span>
             </div>
+            <span className="font-mono text-electric-400">{activeJob.progress_percent.toFixed(0)}%</span>
           </div>
-          <span className="text-electric-400 font-medium">Worker executing in background...</span>
+
+          <div className="w-full h-1.5 bg-amoled-input rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-300 ${activeJob.state === 'completed' ? 'bg-emerald-500' : 'bg-electric-500'}`}
+              style={{ width: `${Math.min(activeJob.progress_percent, 100)}%` }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] text-gray-400 font-mono">
+            <span>{activeJob.current_operation}</span>
+            <span>{(activeJob.bytes_transferred / 1024 / 1024).toFixed(2)} MB transferred</span>
+          </div>
         </div>
       )}
     </div>

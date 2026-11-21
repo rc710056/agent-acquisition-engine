@@ -107,7 +107,7 @@ async def test_worker_end_to_end_job_processing(worker_server_port, monkeypatch)
         job_id = job.id
 
     worker = AcquisitionWorker()
-    processed = await worker.process_next_job()
+    processed = await worker.process_next_job(target_job_id=job_id)
     assert processed is True
 
     # Verify final state in database
