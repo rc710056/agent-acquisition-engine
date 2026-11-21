@@ -54,6 +54,10 @@ app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(providers.router, prefix="/api/v1")
 app.include_router(agent_connections.router, prefix="/api/v1")
 
+# Mount MCP Server-Sent Events (SSE) remote transport at /mcp
+from services.mcp_server.server import mcp
+app.mount("/mcp", mcp.sse_app())
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("apps.api.app.main:app", host=settings.API_HOST, port=settings.API_PORT, reload=True)
