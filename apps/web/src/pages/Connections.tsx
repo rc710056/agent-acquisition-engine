@@ -10,7 +10,7 @@ export const Connections: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'stdio' | 'sse'>('stdio');
+  const [activeTab, setActiveTab] = useState<'stdio' | 'sse' | 'companions'>('stdio');
 
   const fetchConnections = async () => {
     try {
@@ -78,6 +78,23 @@ export const Connections: React.FC = () => {
     "acquisition-engine": {
       "url": "${origin}/mcp/sse",
       "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer ${newKey || '<YOUR_GENERATED_API_KEY>'}"
+      }
+    }
+  }
+}`;
+
+  const markedCompanionConfig = `{
+  "mcpServers": {
+    "marked": {
+      "url": "https://marked.dev/api/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MARKED_DEV_ACCESS_TOKEN>"
+      }
+    },
+    "acquisition-engine": {
+      "url": "${origin}/mcp/sse",
       "headers": {
         "Authorization": "Bearer ${newKey || '<YOUR_GENERATED_API_KEY>'}"
       }
@@ -183,6 +200,15 @@ export const Connections: React.FC = () => {
             >
               Remote & Web Agents (SSE HTTP)
             </button>
+            <button
+              onClick={() => setActiveTab('companions')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors flex items-center space-x-1 ${
+                activeTab === 'companions' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <Sparkles className="w-3 h-3 text-purple-300" />
+              <span>Design Companions (Marked.dev)</span>
+            </button>
           </div>
         </div>
 
@@ -202,7 +228,7 @@ export const Connections: React.FC = () => {
               {stdioConfig}
             </pre>
           </div>
-        ) : (
+        ) : activeTab === 'sse' ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-gray-400">
               <span>Use this endpoint URL in Cursor, Windsurf, LangChain, or remote agent frameworks:</span>
@@ -220,6 +246,50 @@ export const Connections: React.FC = () => {
             <div className="p-2.5 rounded bg-amoled-input/60 border border-amoled-border text-[11px] text-gray-300 flex items-center space-x-2">
               <Globe className="w-4 h-4 text-cyan-400 shrink-0" />
               <span>Direct SSE Streaming URL: <code className="text-cyan-300 font-mono font-semibold">http://127.0.0.1:8000/mcp/sse</code></span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="p-3.5 rounded-lg bg-purple-950/20 border border-purple-500/30 text-xs space-y-2">
+              <div className="flex items-center justify-between text-purple-300 font-semibold font-mono">
+                <span className="flex items-center space-x-1.5">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  <span>Marked.dev + Agent Acquisition Engine Coordination</span>
+                </span>
+                <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-purple-900/60 text-purple-200 border border-purple-700/50">
+                  Design Inspiration + High-Res Fulfillment
+                </span>
+              </div>
+              <p className="text-gray-300 leading-relaxed text-[11px]">
+                <strong>Marked.dev</strong> is your visual taste & bookmark repository (storing UI animations, X clips, and Pinterest pins).
+                When coordinated with <strong>Agent Acquisition Engine</strong>, agents read design targets from Marked and use our engine
+                to download 1080p video, extract high-fidelity frames/contact sheets, and generate matching UI components.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-gray-400">
+              <span>Combined Dual-Server Configuration (Claude Desktop, Cursor, or Cline):</span>
+              <button
+                onClick={() => copyToClipboard(markedCompanionConfig, 'marked')}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded bg-amoled-input border border-amoled-border text-xs text-purple-300 hover:text-white transition-colors"
+              >
+                {copiedKey === 'marked' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedKey === 'marked' ? 'Copied Dual Config!' : 'Copy Dual Config'}</span>
+              </button>
+            </div>
+
+            <pre className="p-3.5 rounded-lg bg-amoled-input border border-purple-500/20 text-xs font-mono text-purple-300 overflow-x-auto leading-relaxed">
+              {markedCompanionConfig}
+            </pre>
+
+            <div className="p-3 rounded-lg bg-amoled-card border border-amoled-border text-xs space-y-1.5 text-gray-400">
+              <div className="text-gray-200 font-medium">How the Agent Coordinates Between Both Platforms:</div>
+              <ol className="list-decimal list-inside space-y-1 text-[11px] text-gray-300 font-mono">
+                <li>Agent calls <code className="text-purple-300">marked</code> tool to search or retrieve your saved design collection or interaction clip.</li>
+                <li>Agent takes the reference media URL and calls <code className="text-electric-300">acquisition-engine:inspect_source</code> to parse stream tracks.</li>
+                <li>Agent triggers <code className="text-electric-300">acquisition-engine:start_acquisition</code> to download full-res video + audio with contact sheet preview.</li>
+                <li>Agent analyzes contact sheet frames to code pixel-perfect Tailwind, React, and CSS animations matching the design!</li>
+              </ol>
             </div>
           </div>
         )}

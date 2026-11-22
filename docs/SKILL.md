@@ -290,6 +290,38 @@ Always share:
 
 ---
 
+## Companion MCPs & Multi-Server Coordination (e.g., Marked.dev)
+
+When building autonomous workflows combining visual taste, design systems, and media engineering, pair **Marked.dev** with **Agent Acquisition Engine (AAE)**:
+
+### 1. Dual MCP Configuration
+In your client configuration (`claude_desktop_config.json`, `.cursor/mcp.json`, or Agent Workspace):
+```json
+{
+  "mcpServers": {
+    "marked": {
+      "url": "https://marked.dev/api/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MARKED_DEV_API_TOKEN>"
+      }
+    },
+    "agent-acquisition-engine": {
+      "url": "https://holdings-son-pressed-forums.trycloudflare.com/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702"
+      }
+    }
+  }
+}
+```
+
+### 2. Autonomous Coordination Pattern
+1. **Target Discovery (`marked`)**: The agent queries your marked.dev collections/bookmarks to find target design references (e.g., interaction clips from X, Pinterest, Vimeo, or web demos).
+2. **Media Fulfillment (`acquisition-engine`)**: The agent passes the discovered asset URL to `inspect_source` and `start_acquisition` to fetch the high-resolution master asset (`best_video_audio`, raw PNG, or 1080p MP4) with contact sheet previews.
+3. **Synthesis & Coding**: The agent analyzes the contact sheet frames and implements responsive, pixel-perfect frontend code directly mirroring the design target.
+
+---
+
 ## Error Handling & Edge Case Solutions
 
 ### Machine-Readable Error Envelope
