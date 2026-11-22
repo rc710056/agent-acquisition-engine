@@ -19,6 +19,7 @@ KNOWN_SHORTENERS = {
 
 KNOWN_PLATFORM_DOMAINS = {
     "archive.org": "internet_archive",
+    "github.com": "github",
     "pinterest.com": "pinterest",
     "pin.it": "pinterest",
     "youtube.com": "permitted_media",
@@ -332,6 +333,21 @@ class SourceClassifier:
                 estimated_size_bytes=content_length,
                 redirect_chain=redirect_chain,
                 title="Internet Archive Collection"
+            )
+
+        if platform_id == "github":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="github",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/zip",
+                estimated_size_bytes=content_length,
+                redirect_chain=redirect_chain,
+                title="GitHub Repository Archive"
             )
 
         if platform_id == "pinterest":
