@@ -26,7 +26,7 @@ class SSRFValidator:
     Enforces protocol whitelists, domain resolution verification, and private IP blocking.
     """
 
-    ALLOWED_SCHEMES = {"http", "https", "magnet"}
+    ALLOWED_SCHEMES = {"http", "https", "magnet", "udp"}
 
     @classmethod
     def validate_url(cls, url: str) -> Tuple[bool, Optional[str]]:
