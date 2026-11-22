@@ -281,12 +281,55 @@ Call `get_artifact` to obtain the verified artifact details and public download 
 }
 ```
 
-**Presenting Result to User**:
-Always share:
-1. File Name and Size (e.g. `12.11 MB`)
-2. Format & Streams (e.g. `H.264 video (640x360) + AAC audio`)
-3. Cryptographic SHA-256 Checksum
-4. Direct Expiring Download Link: `[Download bieber_360p.mp4](download_url)`
+### Visual Card Presentation Standard for Autonomous Agents
+
+To ensure users receive clean, eye-pleasing, actionable interfaces instead of raw JSON walls or plain text lists, agents interacting with users in chat interfaces (e.g. Claude Desktop, Cursor, Base44, ChatGPT, Antigravity) MUST format inspection, in-flight progress, and verified artifact delivery using the following 3 structured interactive card layouts:
+
+#### Card 1: Pre-Download Inspection & Quality Selection Card
+Render immediately after calling `inspect_source` or `list_formats`:
+```markdown
+### 🎬 [Video/Media Title]
+> **Source**: `[hostname]` • **Duration**: `[MM:SS]` • **Rights Tier**: `[Tier]`
+
+| Format Option | Quality / Resolution | Est. Size | Audio Sync | Suggested Action |
+| :--- | :--- | :--- | :--- | :--- |
+| **★ Best Overall** | 1080p Full HD (`mp4`) | `~245 MB` | ✅ Muxed AAC | `start_acquisition(best_video_audio)` |
+| **720p HD** | 720p HD (`mp4`) | `~120 MB` | ✅ Muxed AAC | `start_acquisition(best_720p_mp4)` |
+| **360p Fast** | 360p SD (`mp4`) | `~35 MB` | ✅ Muxed AAC | `start_acquisition(best_360p_mp4)` |
+| **Audio Only** | High-Quality M4A | `~18 MB` | 🎵 Audio Master | `start_acquisition(best_audio)` |
+
+*(Notice: Files > 50 MB require a quick operator sign-off via request_approval prior to queueing).*
+```
+
+#### Card 2: In-Flight Progress Badge Card
+Render when polling `check_progress`:
+```markdown
+### ⏳ Acquiring: `[Filename]`
+`[Step 1: Stream Handshake]` ➔ **`[Step 2: Downloading & Muxing (64%)]`** ➔ `[Step 3: Checksum & Contact Sheet]`
+
+- **Status**: `in_progress` (64% complete)
+- **Speed**: `8.4 MB/s` • **Elapsed**: `12s`
+- **Verification Hash**: Pending ffprobe & SHA-256 validation
+```
+
+#### Card 3: Verified Artifact Delivery Card
+Render upon receiving `status: "completed"` with artifact URLs:
+```markdown
+### ✅ Delivered: `[filename]`
+
+![Visual Proof Contact Sheet]([contact_sheet_url])
+
+| Specification | Verified Property |
+| :--- | :--- |
+| **File Format** | `video/mp4` (H.264 High Profile / AAC 48kHz) |
+| **File Size** | `24.5 MB` (25,690,112 bytes) |
+| **SHA-256 Checksum** | `a1b2c3d4...` *(Cryptographically Verified)* |
+| **Delivery Security** | Single-use expiring token (Valid for 4 hours) |
+
+**Interactive Options**:
+- 📺 **[▶ Stream Preview in Scrub Player](preview_url)** *(RFC 7233 206 Partial Content - instant seeking)*
+- ⬇️ **[Download Master Artifact](download_url)**
+```
 
 ---
 

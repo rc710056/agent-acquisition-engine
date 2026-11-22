@@ -53,6 +53,9 @@ export interface Artifact {
   sha256: string;
   is_verified: boolean;
   download_url: string;
+  preview_url?: string | null;
+  contact_sheet_url?: string | null;
+  preview_metadata?: any;
   expires_at: string;
 }
 

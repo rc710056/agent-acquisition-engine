@@ -104,15 +104,29 @@ export const Files: React.FC = () => {
                     const pType = getPreviewType(art.mime_type, art.filename);
                     if (pType === 'video') {
                       return (
-                        <video
-                          controls
-                          autoPlay
-                          playsInline
-                          className="w-full max-h-52 rounded bg-black object-contain border border-amoled-border"
-                          src={art.download_url}
-                        >
-                          Your browser does not support video playback.
-                        </video>
+                        <div className="space-y-2">
+                          <video
+                            controls
+                            autoPlay
+                            playsInline
+                            className="w-full max-h-56 rounded bg-black object-contain border border-amoled-border shadow-inner"
+                            src={art.preview_url || art.download_url}
+                          >
+                            Your browser does not support video playback.
+                          </video>
+                          {art.contact_sheet_url && (
+                            <div className="pt-2 border-t border-amoled-border/60">
+                              <p className="text-[10px] text-gray-400 font-mono mb-1.5 flex items-center space-x-1">
+                                <span>2x2 Verified Video Scrub Contact Sheet:</span>
+                              </p>
+                              <img
+                                src={art.contact_sheet_url}
+                                alt="2x2 Video Keyframe Contact Sheet"
+                                className="w-full rounded border border-amoled-border object-cover shadow-sm"
+                              />
+                            </div>
+                          )}
+                        </div>
                       );
                     }
                     if (pType === 'audio') {
@@ -122,7 +136,7 @@ export const Files: React.FC = () => {
                             <Volume2 className="w-3.5 h-3.5" />
                             <span>Streaming Audio Preview</span>
                           </div>
-                          <audio controls autoPlay className="w-full h-8" src={art.download_url}>
+                          <audio controls autoPlay className="w-full h-8" src={art.preview_url || art.download_url}>
                             Your browser does not support audio playback.
                           </audio>
                         </div>
@@ -132,7 +146,7 @@ export const Files: React.FC = () => {
                       return (
                         <div className="flex justify-center p-1 bg-black/40 rounded border border-amoled-border">
                           <img
-                            src={art.download_url}
+                            src={art.preview_url || art.download_url}
                             alt={art.filename}
                             className="max-h-60 max-w-full object-contain rounded"
                           />
@@ -142,7 +156,7 @@ export const Files: React.FC = () => {
                     if (pType === 'pdf') {
                       return (
                         <iframe
-                          src={art.download_url}
+                          src={art.preview_url || art.download_url}
                           title={art.filename}
                           className="w-full h-72 rounded bg-white border border-amoled-border shadow-inner"
                         />
@@ -151,7 +165,7 @@ export const Files: React.FC = () => {
                     if (pType === 'text') {
                       return (
                         <iframe
-                          src={art.download_url}
+                          src={art.preview_url || art.download_url}
                           title={art.filename}
                           className="w-full h-48 rounded bg-amoled-input p-2 font-mono text-xs text-gray-200 border border-amoled-border"
                         />

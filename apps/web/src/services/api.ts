@@ -132,6 +132,11 @@ export const api = {
     return handleResponse(res);
   },
 
+  async getArtifact(artifactId: string): Promise<Artifact> {
+    const res = await authFetch(`${BASE_URL}/artifacts/${artifactId}`);
+    return handleResponse(res);
+  },
+
   async listApprovals(): Promise<any[]> {
     const res = await authFetch(`${BASE_URL}/approvals`);
     return handleResponse(res);

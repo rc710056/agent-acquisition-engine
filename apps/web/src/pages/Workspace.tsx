@@ -10,10 +10,16 @@ import {
   Tv,
   CheckCircle2,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Play,
+  Pause,
+  Download,
+  Copy,
+  Check,
+  Sparkles
 } from 'lucide-react';
 import { api } from '../services/api';
-import { SourceInspection, FormatOption, AcquisitionJob } from '../types';
+import { SourceInspection, FormatOption, AcquisitionJob, Artifact } from '../types';
 
 interface WorkspaceProps {
   onJobCreated?: () => void;
@@ -235,6 +241,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [activeJob, setActiveJob] = useState<AcquisitionJob | null>(null);
+  const [completedArtifact, setCompletedArtifact] = useState<Artifact | null>(null);
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [copiedArtifactLink, setCopiedArtifactLink] = useState(false);
 
   const quickSamples = [
     { label: '👻 Movie: Talk to Me', query: 'Talk to Me' },
@@ -253,6 +262,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
     setInspection(null);
     setFormats([]);
     setPreflightData(null);
+    setCompletedArtifact(null);
+    setShowVideoPreview(false);
 
     try {
       const res = await api.inspectSource(targetQuery.trim());
@@ -301,6 +312,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
     if (!inspection) return;
     setStarting(true);
     setError(null);
+    setCompletedArtifact(null);
+    setShowVideoPreview(false);
 
     try {
       const autoApprove = !!preflightData?.requires_approval;
@@ -316,21 +329,37 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
     }
   };
 
-  // Poll active job status if present
+  // Poll active job status and load artifact when completed
   useEffect(() => {
-    if (!activeJob || ['completed', 'failed', 'cancelled'].includes(activeJob.state)) return;
+    if (!activeJob) return;
+
+    if (activeJob.state === 'completed' && activeJob.artifact_id && !completedArtifact) {
+      api.getArtifact(activeJob.artifact_id)
+        .then((art) => setCompletedArtifact(art))
+        .catch((e) => console.error('Failed to load completed artifact', e));
+    }
+
+    if (['completed', 'failed', 'cancelled'].includes(activeJob.state)) return;
 
     const interval = setInterval(async () => {
       try {
         const updated = await api.getJob(activeJob.job_id);
         setActiveJob(updated);
+        if (updated.state === 'completed' && updated.artifact_id) {
+          try {
+            const art = await api.getArtifact(updated.artifact_id);
+            setCompletedArtifact(art);
+          } catch (e) {
+            console.error('Failed to load artifact after job complete', e);
+          }
+        }
       } catch (e) {
         console.error('Failed to poll active job', e);
       }
     }, 1200);
 
     return () => clearInterval(interval);
-  }, [activeJob]);
+  }, [activeJob, completedArtifact]);
 
   const isMovie = inspection?.provider_id === 'movie_intelligence';
 
@@ -605,7 +634,42 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
               const otherFormats = formats.filter((f) => !recommended.includes(f) && !audioOnly.includes(f));
 
               return (
-                <div className="pt-4 border-t border-amoled-border">
+                <div className="pt-4 border-t border-amoled-border space-y-3.5">
+                  {/* One-Click Quality Selection Pills */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-gray-400 font-mono">
+                      <span className="flex items-center space-x-1.5 text-gray-200 font-semibold">
+                        <Sparkles className="w-3.5 h-3.5 text-electric-400" />
+                        <span>Instant Quality Selection:</span>
+                      </span>
+                      <span>Click to switch resolution or format</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-0.5">
+                      {formats.map((f) => {
+                        const isSelected = f.format_id === selectedFormat;
+                        const sizeMb = f.estimated_size_bytes ? `${(f.estimated_size_bytes / 1024 / 1024).toFixed(1)} MB` : 'Dynamic';
+                        const isVideoAudio = f.file_type === 'video' && f.has_audio !== false;
+                        return (
+                          <button
+                            key={f.format_id}
+                            type="button"
+                            onClick={() => handleFormatChange(f.format_id)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-all flex items-center space-x-1.5 border shadow-sm ${
+                              isSelected
+                                ? 'bg-electric-600 text-white border-electric-400 font-semibold ring-2 ring-electric-500/40 shadow-electric-600/30'
+                                : 'bg-amoled-input/80 text-gray-300 border-amoled-border hover:border-electric-500/50 hover:bg-amoled-hover'
+                            }`}
+                          >
+                            <span>{f.format_id === 'best_video_audio' ? '★ ' : ''}{f.resolution || f.quality_label.split('•')[0].trim()}</span>
+                            <span className="text-[10px] opacity-75 font-normal">({sizeMb})</span>
+                            {isVideoAudio && <span className="text-[9px] px-1 rounded bg-emerald-900/60 text-emerald-300">AV</span>}
+                            {f.file_type === 'audio' && <span className="text-[9px] px-1 rounded bg-cyan-900/60 text-cyan-300">Audio</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 rounded-xl bg-amoled-input/30 border border-amoled-border/60 shadow-inner">
                     <div className="flex flex-wrap items-center gap-3 min-w-0">
                       <div className="flex items-center space-x-2 shrink-0">
@@ -754,13 +818,184 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onJobCreated, onNavigateTo
             <span>{(activeJob.bytes_transferred / 1024 / 1024).toFixed(2)} MB transferred</span>
           </div>
 
+          {/* Acquisition Pipeline Steps Indicator */}
+          <div className="grid grid-cols-3 gap-2 pt-1">
+            <div className={`p-2 rounded-lg border text-center font-mono text-[10px] ${
+              ['downloading', 'verifying', 'completed'].includes(activeJob.state)
+                ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300 font-semibold'
+                : 'bg-amoled-input/50 border-amoled-border text-gray-400'
+            }`}>
+              1. Stream Handshake
+            </div>
+            <div className={`p-2 rounded-lg border text-center font-mono text-[10px] ${
+              ['verifying', 'completed'].includes(activeJob.state)
+                ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300 font-semibold'
+                : activeJob.state === 'downloading'
+                ? 'bg-electric-950/40 border-electric-700/60 text-electric-300 animate-pulse font-semibold'
+                : 'bg-amoled-input/50 border-amoled-border text-gray-400'
+            }`}>
+              2. Download & Mux
+            </div>
+            <div className={`p-2 rounded-lg border text-center font-mono text-[10px] ${
+              activeJob.state === 'completed'
+                ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300 font-semibold'
+                : activeJob.state === 'verifying'
+                ? 'bg-electric-950/40 border-electric-700/60 text-electric-300 animate-pulse font-semibold'
+                : 'bg-amoled-input/50 border-amoled-border text-gray-400'
+            }`}>
+              3. ffprobe & Checksum
+            </div>
+          </div>
+
           {activeJob.state === 'failed' && activeJob.error_message && (
             <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/40 text-red-300 text-xs">
               <span className="font-medium">Error: </span>{activeJob.error_message}
             </div>
           )}
 
-          {activeJob.state === 'completed' && onNavigateToFiles && (
+          {/* Card 3: Verified Artifact Delivery Card with Contact Sheet & Inline Player */}
+          {activeJob.state === 'completed' && completedArtifact && (
+            <div className="mt-4 p-4 rounded-xl border border-emerald-500/30 bg-amoled-input/80 space-y-3.5 shadow-lg">
+              <div className="flex items-center justify-between border-b border-amoled-border/80 pb-2.5">
+                <div className="flex items-center space-x-2 text-emerald-400 font-semibold text-xs font-mono">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>VERIFIED ARTIFACT READY FOR PLAYBACK & DOWNLOAD</span>
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">
+                  {(completedArtifact.size_bytes / 1024 / 1024).toFixed(2)} MB
+                </span>
+              </div>
+
+              {/* 2x2 Contact Sheet Visual Preview */}
+              {completedArtifact.contact_sheet_url && !showVideoPreview && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-gray-400 font-mono">
+                    <span>2x2 Keyframe Contact Sheet (Visual Proof):</span>
+                    <span className="text-emerald-400 text-[10px]">Streams Synced</span>
+                  </div>
+                  <div className="relative group rounded-xl overflow-hidden border border-amoled-border shadow-md">
+                    <img
+                      src={completedArtifact.contact_sheet_url}
+                      alt="2x2 Video Keyframe Contact Sheet"
+                      className="w-full object-cover max-h-64"
+                    />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <button
+                        onClick={() => setShowVideoPreview(true)}
+                        className="px-4 py-2 rounded-xl bg-electric-600 hover:bg-electric-500 text-white font-medium text-xs flex items-center space-x-2 shadow-xl"
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Launch Streaming Video Player</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Inline Range Streaming Video Player */}
+              {showVideoPreview && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-electric-400 font-mono">
+                    <span>Streaming Video Scrub Player (RFC 7233 206 Partial Content):</span>
+                    <button
+                      onClick={() => setShowVideoPreview(false)}
+                      className="text-gray-400 hover:text-white text-[10px] underline"
+                    >
+                      Show Contact Sheet
+                    </button>
+                  </div>
+                  <video
+                    controls
+                    autoPlay
+                    playsInline
+                    className="w-full max-h-72 rounded-xl bg-black border border-amoled-border shadow-inner"
+                    src={completedArtifact.preview_url || completedArtifact.download_url}
+                  >
+                    Your browser does not support video playback.
+                  </video>
+                </div>
+              )}
+
+              {/* File Specs & Checksum */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
+                <div className="p-2 rounded bg-amoled-card border border-amoled-border text-gray-300 truncate">
+                  <span className="text-gray-500">File: </span>{completedArtifact.filename}
+                </div>
+                <div className="p-2 rounded bg-amoled-card border border-amoled-border text-gray-300 truncate flex items-center justify-between">
+                  <span className="truncate" title={completedArtifact.sha256}>
+                    <span className="text-gray-500">SHA-256: </span>{completedArtifact.sha256.slice(0, 18)}...
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(completedArtifact.sha256);
+                      setCopiedArtifactLink(true);
+                      setTimeout(() => setCopiedArtifactLink(false), 2000);
+                    }}
+                    className="ml-2 text-gray-400 hover:text-white shrink-0"
+                    title="Copy Full SHA-256"
+                  >
+                    {copiedArtifactLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center space-x-2">
+                  {completedArtifact.mime_type.startsWith('video/') && (
+                    <button
+                      onClick={() => setShowVideoPreview(!showVideoPreview)}
+                      className="px-3.5 py-2 rounded-lg bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-xs text-electric-300 hover:text-white flex items-center space-x-1.5 transition-colors"
+                    >
+                      {showVideoPreview ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Close Player</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 text-electric-400" />
+                          <span>Play Video Preview</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(completedArtifact.download_url);
+                      setCopiedArtifactLink(true);
+                      setTimeout(() => setCopiedArtifactLink(false), 2000);
+                    }}
+                    className="px-3 py-2 rounded-lg bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-xs text-gray-300 hover:text-white flex items-center space-x-1.5 transition-colors"
+                  >
+                    {copiedArtifactLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedArtifactLink ? 'Copied Download Link!' : 'Copy Link'}</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  {onNavigateToFiles && (
+                    <button
+                      onClick={onNavigateToFiles}
+                      className="px-3 py-2 rounded-lg bg-amoled-input hover:bg-amoled-hover border border-amoled-border text-xs text-gray-300 hover:text-white transition-colors"
+                    >
+                      Vault &rarr;
+                    </button>
+                  )}
+                  <a
+                    href={completedArtifact.download_url}
+                    download={completedArtifact.filename}
+                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs flex items-center space-x-1.5 shadow-md shadow-emerald-600/30 transition-all"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download {completedArtifact.filename.split('.').pop()?.toUpperCase()}</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeJob.state === 'completed' && !completedArtifact && onNavigateToFiles && (
             <div className="pt-2 flex justify-end">
               <button
                 onClick={onNavigateToFiles}
