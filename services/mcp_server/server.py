@@ -366,6 +366,23 @@ async def inspect_source(
         if not recommended_fmt:
             recommended_fmt = formats[0]
 
+    calc_size = inspection.estimated_size_bytes
+    if calc_size is None and recommended_fmt:
+        calc_size = recommended_fmt.estimated_size_bytes
+
+    if not inspection.is_permitted:
+        requires_approval = False
+        approval_reason = None
+    elif calc_size is None:
+        requires_approval = True
+        approval_reason = "File size is unknown. Operator approval required before acquisition."
+    elif calc_size > 52_428_800:
+        requires_approval = True
+        approval_reason = f"Estimated file size ({calc_size} bytes) exceeds 50 MB threshold. Operator approval required."
+    else:
+        requires_approval = False
+        approval_reason = None
+
     return make_success_envelope({
         "source_id": source_id,
         "url": url,
@@ -379,6 +396,8 @@ async def inspect_source(
         "capabilities": inspection.capabilities,
         "mime_type": inspection.mime_type,
         "estimated_size_bytes": inspection.estimated_size_bytes,
+        "requires_approval": requires_approval,
+        "approval_reason": approval_reason,
         "inspection_status": inspection.inspection_status,
         "title": inspection.title,
         "recommended_format_id": recommended_fmt.format_id if recommended_fmt else None,
@@ -599,6 +618,8 @@ async def start_acquisition(
     format_id: str,
     approval_id: Optional[str] = None,
     execution_mode: str = "cloud",
+    delivery_target: Optional[Dict[str, Any]] = None,
+    privacy: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
     token: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -689,6 +710,13 @@ async def start_acquisition(
                     remediation="Wait for operator approval or verify approval_id."
                 )
 
+        target_cfg = delivery_target or ({"type": "ephemeral"} if privacy and privacy.get("retention") == "none" else {"type": "local"})
+        privacy_cfg = privacy or {
+            "egress": "pooled",
+            "retention": "none" if target_cfg.get("type") == "ephemeral" else "persistent",
+            "log_level": "metadata_only"
+        }
+
         stmt_cache = select(Artifact).where(
             Artifact.origin_cache_key == cache_key,
             Artifact.is_verified == True
@@ -696,6 +724,17 @@ async def start_acquisition(
         cache_res = await session.execute(stmt_cache)
         cached_art = cache_res.scalar_one_or_none()
         cached_path = storage_service.get_artifact_path(cached_art.storage_path) if cached_art else None
+
+        # Invalidate false audio cache if a video format was requested
+        is_bad_video_cache = False
+        if cached_art and opt.file_type == "video":
+            if cached_art.mime_type.startswith("audio/") or cached_art.filename.lower().endswith((".m4a", ".mp3", ".aac")):
+                is_bad_video_cache = True
+                cached_art.is_verified = False
+                await session.commit()
+                cached_art = None
+                cached_path = None
+
         if cached_art and cached_path:
             if cached_art.user_id != user_id:
                 cached_art = Artifact(
@@ -728,7 +767,7 @@ async def start_acquisition(
                 job_id=job.id,
                 event_type="completed",
                 message=f"Artifact {cached_art.filename} served from deduplication cache.",
-                payload={"cached": True, "artifact_id": cached_art.id}
+                payload={"cached": True, "artifact_id": cached_art.id, "delivery_target": target_cfg, "privacy": privacy_cfg}
             ))
             await session.commit()
             await session.refresh(job)
@@ -738,6 +777,8 @@ async def start_acquisition(
                 "is_cached": True,
                 "artifact_id": cached_art.id,
                 "execution_mode": job.execution_mode,
+                "delivery_target": target_cfg,
+                "privacy": privacy_cfg,
                 "user_dashboard_url": dashboard_url,
                 "created_at": job.created_at.isoformat(),
                 "message": "Instant acquisition cache hit. Artifact delivered from local deduplication cache."
@@ -752,6 +793,13 @@ async def start_acquisition(
             current_operation="Queued for worker execution"
         )
         session.add(job)
+        await session.flush()
+        session.add(JobEvent(
+            job_id=job.id,
+            event_type="queued",
+            message="Job queued with target policy.",
+            payload={"delivery_target": target_cfg, "privacy": privacy_cfg}
+        ))
         await session.commit()
         await session.refresh(job)
 
@@ -759,6 +807,8 @@ async def start_acquisition(
         "job_id": job.id,
         "state": job.state,
         "execution_mode": job.execution_mode,
+        "delivery_target": target_cfg,
+        "privacy": privacy_cfg,
         "user_dashboard_url": dashboard_url,
         "created_at": job.created_at.isoformat()
     })
@@ -813,7 +863,7 @@ async def get_artifact(
         if not art or not art.is_verified or (not _is_admin_credential(user, api_key, token) and art.user_id != user.id):
             return make_error_envelope(code="NOT_FOUND", message=f"Artifact ID '{artifact_id}' not found.")
 
-        dl_url, expires_at = storage_service.generate_delivery_url(art.id)
+        bundle = storage_service.generate_delivery_bundle(art.id)
 
         return make_success_envelope({
             "artifact_id": art.id,
@@ -822,9 +872,11 @@ async def get_artifact(
             "size_bytes": art.size_bytes,
             "sha256": art.sha256,
             "is_verified": art.is_verified,
-            "download_url": dl_url,
-            "preview_url": dl_url,
-            "expires_at": expires_at.isoformat()
+            "download_url": bundle["download_url"],
+            "preview_url": bundle["preview_url"],
+            "contact_sheet_url": bundle["contact_sheet_url"] if art.mime_type.startswith("video/") else None,
+            "preview_metadata": art.preview_metadata,
+            "expires_at": bundle["expires_at"].isoformat()
         })
 
 # =====================================================================
@@ -1103,9 +1155,18 @@ async def _mcp_start_acquisition(
     format_id: str,
     ctx: Context,
     approval_id: Optional[str] = None,
-    execution_mode: str = "cloud"
+    execution_mode: str = "cloud",
+    delivery_target: Optional[Dict[str, Any]] = None,
+    privacy: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    return await start_acquisition(source_id, format_id, approval_id, execution_mode)
+    return await start_acquisition(
+        source_id=source_id,
+        format_id=format_id,
+        approval_id=approval_id,
+        execution_mode=execution_mode,
+        delivery_target=delivery_target,
+        privacy=privacy
+    )
 
 @mcp.tool(
     name="get_job_status",

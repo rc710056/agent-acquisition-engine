@@ -18,6 +18,7 @@ KNOWN_SHORTENERS = {
 }
 
 KNOWN_PLATFORM_DOMAINS = {
+    "archive.org": "internet_archive",
     "pinterest.com": "pinterest",
     "pin.it": "pinterest",
     "youtube.com": "permitted_media",
@@ -46,7 +47,7 @@ DIRECT_FILE_EXTENSIONS = {
     # Video
     "mp4", "mkv", "webm", "avi", "mov", "flv", "m4v",
     # Archives & Packages
-    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "torrent",
+    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar",
     # Binaries & Data
     "exe", "bin", "iso", "dmg", "deb", "rpm", "parquet"
 }
@@ -66,7 +67,8 @@ class ClassificationResult:
         redirect_chain: Optional[List[str]] = None,
         title: Optional[str] = None,
         extracted_media_links: Optional[List[Dict[str, Any]]] = None,
-        errors: Optional[List[str]] = None
+        errors: Optional[List[str]] = None,
+        inspection_status: Optional[str] = None
     ):
         self.original_url = original_url
         self.resolved_url = resolved_url
@@ -81,6 +83,7 @@ class ClassificationResult:
         self.title = title
         self.extracted_media_links = extracted_media_links or []
         self.errors = errors or []
+        self.inspection_status = inspection_status or ("blocked" if source_type == SourceType.SOURCE_BLOCKED else "inspected")
 
 class SourceClassifier:
     """
@@ -191,7 +194,7 @@ class SourceClassifier:
         redirect_chain = [url]
         current_url = url
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "User-Agent": "agent-acquisition-engine/0.2.0 (+https://github.com/rc710056/agent-acquisition-engine; bot)",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,video/*,audio/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9"
         }
@@ -219,11 +222,44 @@ class SourceClassifier:
                 acquisition_permission=AcquisitionPermission.UNKNOWN,
                 source_access_status=SourceAccessStatus.UNAVAILABLE,
                 redirect_chain=redirect_chain,
-                errors=[f"Network resolution error: {str(e)}"]
+                errors=[f"Network resolution error: {str(e)}"],
+                inspection_status="failed"
             )
 
-        # 4. Handle HTTP Status Codes (Auth required, Unavailable, Forbidden)
-        if status_code in {401, 403}:
+        resolved_domain = cls._extract_root_domain(current_url)
+        platform_id = cls._match_platform_domain(resolved_domain)
+
+        if platform_id == "unsupported_restricted":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.UNSUPPORTED_SOURCE,
+                provider_id="unsupported",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.BLOCKED,
+                mime_type=resp_headers.get("content-type", "").split(";")[0].strip().lower(),
+                redirect_chain=redirect_chain,
+                errors=[f"Platform '{resolved_domain}' is restricted by access controls and platform policy."],
+                inspection_status="restricted"
+            )
+
+        # 4. Handle HTTP Status Codes (Forbidden, Rate-limited, Unavailable, Auth required)
+        if status_code in {403, 429, 503}:
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.SOURCE_BLOCKED,
+                provider_id="unsupported",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.BLOCKED,
+                redirect_chain=redirect_chain,
+                errors=[f"Source-side access blocked (HTTP {status_code}): Automated requests are blocked or rate-limited by the host."],
+                inspection_status="blocked"
+            )
+
+        if status_code == 401:
             return ClassificationResult(
                 original_url=url,
                 resolved_url=current_url,
@@ -233,7 +269,8 @@ class SourceClassifier:
                 acquisition_permission=AcquisitionPermission.USER_AUTHORIZATION_REQUIRED,
                 source_access_status=SourceAccessStatus.AUTHENTICATION_REQUIRED,
                 redirect_chain=redirect_chain,
-                errors=[f"Source returned HTTP {status_code}: Authentication or permission required."]
+                errors=["Source returned HTTP 401: Authentication required."],
+                inspection_status="restricted"
             )
 
         if status_code >= 400:
@@ -246,7 +283,30 @@ class SourceClassifier:
                 acquisition_permission=AcquisitionPermission.UNKNOWN,
                 source_access_status=SourceAccessStatus.UNAVAILABLE,
                 redirect_chain=redirect_chain,
-                errors=[f"Source returned HTTP error {status_code}."]
+                errors=[f"Source returned HTTP error {status_code}."],
+                inspection_status="failed"
+            )
+
+        # Anti-bot detection in headers/body
+        lowered_body = response_body.lower()
+        is_anti_bot = (
+            any(hdr in resp_headers for hdr in ["cf-mitigated", "cf-chl-bypass"])
+            or "cf-browser-verification" in lowered_body
+            or ("cloudflare" in lowered_body and any(phrase in lowered_body for phrase in ["just a moment...", "attention required", "checking your browser", "enable javascript and cookies"]))
+            or ("challenge" in lowered_body and any(bot in lowered_body for bot in ["turnstile", "hcaptcha", "recaptcha", "bot protection"]))
+        )
+        if is_anti_bot:
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.SOURCE_BLOCKED,
+                provider_id="unsupported",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.BLOCKED,
+                redirect_chain=redirect_chain,
+                errors=["Source access blocked by anti-bot verification challenge."],
+                inspection_status="blocked"
             )
 
         # 5. Analyze Content-Type and URL features
@@ -259,6 +319,21 @@ class SourceClassifier:
 
         # Check known platform domains first
         platform_id = cls._match_platform_domain(resolved_domain)
+        if platform_id == "internet_archive":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="internet_archive",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type=mime_type,
+                estimated_size_bytes=content_length,
+                redirect_chain=redirect_chain,
+                title="Internet Archive Collection"
+            )
+
         if platform_id == "pinterest":
             return ClassificationResult(
                 original_url=url,
@@ -315,11 +390,33 @@ class SourceClassifier:
                 errors=[f"Platform '{resolved_domain}' is restricted by access controls and platform policy."]
             )
 
+        # Check for BitTorrent file (.torrent)
+        path = urlparse(current_url).path
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        orig_path = urlparse(url).path
+        is_torrent_file = (
+            extension == "torrent"
+            or orig_path.lower().endswith(".torrent")
+            or mime_type in {"application/x-bittorrent", "application/x-torrent"}
+        )
+        if is_torrent_file:
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="torrent",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/x-bittorrent",
+                estimated_size_bytes=content_length,
+                redirect_chain=redirect_chain,
+                title=f"BitTorrent: {os.path.basename(path) or 'torrent_file'}"
+            )
+
         # 6. Check for DIRECT_FILE
         # CRITICAL RULE: text/html is NEVER a direct file!
         is_html = (mime_type == "text/html")
-        path = urlparse(current_url).path
-        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
         has_direct_ext = extension in DIRECT_FILE_EXTENSIONS
 
         # If it's a binary stream, image, video, audio, document, text file, or archive (not html)

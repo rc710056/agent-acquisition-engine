@@ -10,6 +10,7 @@ class SourceType(str, Enum):
     MEDIA_COLLECTION = "MEDIA_COLLECTION"
     SHORT_URL = "SHORT_URL"
     DOCUMENT_PAGE = "DOCUMENT_PAGE"
+    SOURCE_BLOCKED = "SOURCE_BLOCKED"
     UNSUPPORTED_SOURCE = "UNSUPPORTED_SOURCE"
 
 class SecurityStatus(str, Enum):
@@ -102,6 +103,8 @@ class SourceInspectionResponse(BaseModel):
     mime_type: Optional[str] = None
     estimated_size_bytes: Optional[int] = None
     inspection_status: str
+    requires_approval: bool = False
+    approval_reason: Optional[str] = None
     title: Optional[str] = None
     thumbnail_url: Optional[str] = None
     assets: List[MediaAsset] = []
@@ -166,4 +169,7 @@ class ArtifactMetadata(BaseModel):
     sha256: str
     is_verified: bool
     download_url: str
+    preview_url: Optional[str] = None
+    contact_sheet_url: Optional[str] = None
+    preview_metadata: Optional[Dict[str, Any]] = None
     expires_at: datetime

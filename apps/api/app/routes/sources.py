@@ -57,6 +57,25 @@ async def inspect_source(
         if inspection.source_type == SourceType.DIRECT_FILE and classification.source_type != SourceType.DIRECT_FILE:
             inspection.source_type = classification.source_type
 
+    # Calculate advance approval gate visibility (Gap 2.7)
+    if inspection.is_permitted:
+        calc_size = inspection.estimated_size_bytes
+        if calc_size is None and inspection.formats:
+            calc_size = inspection.formats[0].estimated_size_bytes
+
+        if calc_size is None:
+            inspection.requires_approval = True
+            inspection.approval_reason = "File size is unknown. Operator approval required before acquisition."
+        elif calc_size > 52_428_800:
+            inspection.requires_approval = True
+            inspection.approval_reason = f"Estimated file size ({calc_size} bytes) exceeds 50 MB threshold. Operator approval required."
+        else:
+            inspection.requires_approval = False
+            inspection.approval_reason = None
+    else:
+        inspection.requires_approval = False
+        inspection.approval_reason = None
+
     # Persist or update Source in database
     stmt = select(Source).where(Source.url == url)
     res = await db.execute(stmt)

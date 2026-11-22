@@ -155,9 +155,11 @@ class ChunkedDownloader:
 
         progress_lock = asyncio.Lock()
         transferred_bytes = 0
+        first_content_type = ""
+        first_headers = None
 
         async def fetch_range(start: int, end: int):
-            nonlocal transferred_bytes
+            nonlocal transferred_bytes, first_content_type, first_headers
             r_headers = dict(headers)
             r_headers["Range"] = f"bytes={start}-{end}"
 
@@ -168,6 +170,10 @@ class ChunkedDownloader:
             ) as client:
                 response = await send_with_safe_redirects(client, "GET", url, r_headers)
                 try:
+                    if not first_content_type and "content-type" in response.headers:
+                        first_content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+                        first_headers = response.headers
+
                     expected_range = f"bytes {start}-{end}/{total_bytes}"
                     if response.status_code != 206 or response.headers.get("content-range", "").lower() != expected_range:
                         raise RangeDownloadError(
@@ -219,7 +225,9 @@ class ChunkedDownloader:
             "bytes_downloaded": final_size,
             "sha256": sha256.hexdigest(),
             "is_chunked": True,
-            "chunks_count": chunk_count
+            "chunks_count": chunk_count,
+            "content_type": first_content_type,
+            "headers": first_headers
         }
 
     async def _download_sequential(
@@ -274,5 +282,7 @@ class ChunkedDownloader:
             "bytes_downloaded": transferred,
             "sha256": sha256.hexdigest(),
             "is_chunked": False,
-            "chunks_count": 1
+            "chunks_count": 1,
+            "content_type": response.headers.get("content-type", "").split(";")[0].strip().lower(),
+            "headers": response.headers
         }

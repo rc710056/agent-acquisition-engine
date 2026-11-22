@@ -2,7 +2,7 @@ import os
 import shutil
 import hashlib
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
 from apps.api.app.config import settings
 from apps.api.app.security.tokens import generate_signed_delivery_token
@@ -76,9 +76,9 @@ class StorageService:
             return resolved
         return None
 
-    def generate_delivery_url(self, artifact_id: str, base_url: Optional[str] = None, ttl_seconds: Optional[int] = None) -> Tuple[str, datetime]:
+    def generate_delivery_bundle(self, artifact_id: str, base_url: Optional[str] = None, ttl_seconds: Optional[int] = None) -> Dict[str, Any]:
         """
-        Creates a time-bounded cryptographically signed download URL for an artifact.
+        Generates full delivery and preview links (download, inline preview, contact sheet) with signed token.
         """
         ttl = ttl_seconds or settings.EXPIRING_URL_TTL_SECONDS
         token = generate_signed_delivery_token(artifact_id, settings.SECRET_KEY, ttl_seconds=ttl)
@@ -90,8 +90,85 @@ class StorageService:
             or config.PUBLIC_BASE_URL
             or settings.API_BASE_URL
         ).rstrip("/")
-        download_url = f"{api_base}/api/v1/delivery/download?token={token}"
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-        return download_url, expires_at
+        return {
+            "token": token,
+            "download_url": f"{api_base}/api/v1/delivery/download?token={token}&disposition=attachment",
+            "preview_url": f"{api_base}/api/v1/delivery/download?token={token}&disposition=inline",
+            "contact_sheet_url": f"{api_base}/api/v1/delivery/download?token={token}&view=contact_sheet&disposition=inline",
+            "expires_at": expires_at
+        }
+
+    def generate_delivery_url(self, artifact_id: str, base_url: Optional[str] = None, ttl_seconds: Optional[int] = None) -> Tuple[str, datetime]:
+        """
+        Creates a time-bounded cryptographically signed download URL for an artifact.
+        """
+        bundle = self.generate_delivery_bundle(artifact_id, base_url=base_url, ttl_seconds=ttl_seconds)
+        return bundle["download_url"], bundle["expires_at"]
+
+    def generate_contact_sheet(self, video_path: Path, output_filename: Optional[str] = None) -> Optional[Path]:
+        """
+        Generates a 2x2 contact sheet tile thumbnail for a video artifact using ffmpeg.
+        Returns the path to the generated image file, or None if failed.
+        """
+        if not video_path.exists():
+            return None
+
+        out_name = output_filename or f"{video_path.stem}_contact_sheet.jpg"
+        out_path = self.artifacts_dir / out_name
+
+        import subprocess
+        # 1. Attempt 2x2 tiled contact sheet
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-vf", "select='not(mod(n\\,60))',scale=320:180,tile=2x2",
+                "-frames:v", "1", "-q:v", "3",
+                str(out_path)
+            ]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            if out_path.exists() and out_path.stat().st_size > 0:
+                return out_path
+        except Exception:
+            pass
+
+        # 2. Fallback to single frame snapshot
+        try:
+            cmd_fallback = [
+                "ffmpeg", "-y", "-ss", "00:00:01", "-i", str(video_path),
+                "-frames:v", "1", "-q:v", "3",
+                str(out_path)
+            ]
+            subprocess.run(cmd_fallback, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if out_path.exists() and out_path.stat().st_size > 0:
+                return out_path
+        except Exception:
+            pass
+
+        return None
+
+    async def clean_expired_artifacts(self, session) -> int:
+        """
+        Deletes artifacts from disk and database whose retention TTL has expired.
+        """
+        from sqlalchemy import select
+        from apps.api.app.models.entities import Artifact
+        now = datetime.now(timezone.utc)
+        stmt = select(Artifact).where(Artifact.expires_at.is_not(None), Artifact.expires_at <= now)
+        res = await session.execute(stmt)
+        expired = res.scalars().all()
+        count = 0
+        for art in expired:
+            p = self.get_artifact_path(art.storage_path)
+            if p and p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            await session.delete(art)
+            count += 1
+        if count > 0:
+            await session.commit()
+        return count
 
 storage_service = StorageService()

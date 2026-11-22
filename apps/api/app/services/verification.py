@@ -110,10 +110,68 @@ class FileVerifier:
             errors.append(f"Checksum mismatch: expected {expected_sha256}, got {calculated_sha256}.")
 
         # 5. MIME and Magic byte inspection
+        ext = file_path.suffix.lower().lstrip(".")
         detected_mime = "application/octet-stream"
         kind = filetype.guess(str(file_path))
-        if kind:
+        if kind and kind.mime != "application/octet-stream":
             detected_mime = kind.mime
+        else:
+            # For text-like files (text/*, application/json, application/csv),
+            # filetype.guess returns None. Check if valid UTF-8 and use expected or extension-derived MIME.
+            is_valid_utf8 = False
+            try:
+                with open(file_path, "rb") as f:
+                    sample = f.read(262144)
+                sample.decode("utf-8")
+                is_valid_utf8 = True
+            except (UnicodeDecodeError, Exception):
+                is_valid_utf8 = False
+
+            text_ext_mimes = {
+                "md": "text/markdown",
+                "markdown": "text/markdown",
+                "txt": "text/plain",
+                "text": "text/plain",
+                "csv": "text/csv",
+                "tsv": "text/tab-separated-values",
+                "json": "application/json",
+                "jsonl": "application/x-ndjson",
+                "ndjson": "application/x-ndjson",
+                "xml": "application/xml",
+                "html": "text/html",
+                "htm": "text/html",
+                "yaml": "text/yaml",
+                "yml": "text/yaml",
+                "js": "text/javascript",
+                "ts": "text/typescript",
+                "py": "text/x-python",
+                "css": "text/css",
+                "sh": "text/x-shellscript",
+                "sql": "text/x-sql",
+            }
+
+            if is_valid_utf8:
+                if expected_mime and (
+                    expected_mime.startswith("text/")
+                    or expected_mime in {
+                        "application/json",
+                        "application/csv",
+                        "application/xml",
+                        "application/javascript",
+                        "application/x-ndjson"
+                    }
+                ):
+                    detected_mime = expected_mime
+                elif ext in text_ext_mimes:
+                    detected_mime = text_ext_mimes[ext]
+                elif expected_file_type == "text":
+                    detected_mime = "text/plain"
+                elif ext in {"txt", "csv", "json", "md"}:
+                    detected_mime = text_ext_mimes.get(ext, "text/plain")
+                else:
+                    detected_mime = "text/plain"
+            else:
+                detected_mime = "application/octet-stream"
 
         # Read first 512 bytes for header signature verification
         try:
@@ -123,7 +181,6 @@ class FileVerifier:
             header = b""
             warnings.append(f"Could not read file header: {str(e)}")
 
-        ext = file_path.suffix.lower().lstrip(".")
         if ext in MAGIC_SIGNATURES:
             sig = MAGIC_SIGNATURES[ext]
             if not header.startswith(sig):

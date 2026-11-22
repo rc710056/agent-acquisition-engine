@@ -58,6 +58,10 @@ async def init_db() -> None:
                 cols = [c["name"] for c in inspector.get_columns("artifacts")]
                 if "origin_cache_key" not in cols:
                     connection.execute(text("ALTER TABLE artifacts ADD COLUMN origin_cache_key VARCHAR(128)"))
+                if "expires_at" not in cols:
+                    connection.execute(text("ALTER TABLE artifacts ADD COLUMN expires_at DATETIME"))
+                if "preview_metadata" not in cols:
+                    connection.execute(text("ALTER TABLE artifacts ADD COLUMN preview_metadata JSON"))
         await conn.run_sync(_check_and_add_columns)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -137,7 +137,7 @@ class TorrentProvider(BaseProviderContract):
         )
 
     async def _inspect_torrent_file(self, torrent_url: str) -> SourceInspectionResponse:
-        headers = {"User-Agent": "AgentAcquisitionEngine/1.0"}
+        headers = {"User-Agent": "agent-acquisition-engine/0.2.0 (+https://github.com/rc710056/agent-acquisition-engine; bot)"}
         try:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(torrent_url, headers=headers)

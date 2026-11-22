@@ -11,6 +11,10 @@ class AcquisitionCancelledError(Exception):
     """Raised when an in-flight acquisition is aborted by operator or system request."""
     pass
 
+class DownloadStalledError(Exception):
+    """Raised when an in-flight acquisition stalls due to lack of progress or 0 bytes transferred."""
+    pass
+
 from apps.api.app.config import settings
 from apps.api.app.models.database import async_session_factory, init_db
 from apps.api.app.models.entities import (
@@ -163,6 +167,12 @@ class AcquisitionWorker:
                 Artifact.is_verified == True
             ).order_by(Artifact.created_at.desc()).limit(1)
             cached_art = (await session.execute(stmt)).scalar_one_or_none()
+            if cached_art and opt_file_type == "video":
+                if cached_art.mime_type.startswith("audio/") or cached_art.filename.lower().endswith((".m4a", ".mp3", ".aac")):
+                    cached_art.is_verified = False
+                    await session.commit()
+                    cached_art = None
+
             if cached_art and storage_service.get_artifact_path(cached_art.storage_path).exists():
                 job_record = await session.get(AcquisitionJob, job_id)
                 if job_record:
@@ -209,12 +219,20 @@ class AcquisitionWorker:
         temp_destination = storage_service.get_temp_path(prefix=f"job_{job_id[:8]}")
         start_time = datetime.now(timezone.utc)
 
+        import time
+
+        stall_timeout = getattr(settings, "DOWNLOAD_STALL_TIMEOUT_SECONDS", 60.0)
+        last_progress_timestamp = time.time()
+        transferred_bytes_count = 0
         last_progress_time = 0.0
 
         async def on_progress(transferred: int, total: Optional[int]) -> None:
-            nonlocal last_progress_time
-            import time
+            nonlocal last_progress_time, last_progress_timestamp, transferred_bytes_count
             now = time.time()
+            if transferred > transferred_bytes_count or transferred > 0:
+                transferred_bytes_count = transferred
+                last_progress_timestamp = now
+
             if now - last_progress_time < 0.4:
                 return  # Throttle DB writes
             last_progress_time = now
@@ -237,16 +255,49 @@ class AcquisitionWorker:
                 )
                 await s.commit()
 
+        async def stall_watchdog(task: asyncio.Task):
+            while not task.done():
+                await asyncio.sleep(1.0)
+                elapsed = time.time() - last_progress_timestamp
+                if elapsed >= stall_timeout:
+                    logger.warning(
+                        f"Job {job_id} download stalled: {transferred_bytes_count} bytes transferred, "
+                        f"no progress for {elapsed:.1f}s (threshold: {stall_timeout}s)."
+                    )
+                    task.cancel()
+                    break
+
         try:
-            # 1. Download stream
-            acquire_result = await provider.acquire(
-                url=target_url,
-                format_id=format_id,
-                destination_path=temp_destination,
-                progress_callback=on_progress,
-                timeout_seconds=settings.DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
-                max_size_bytes=settings.MAX_FILE_SIZE_BYTES
+            # 1. Download stream with stall watchdog
+            acquire_task = asyncio.create_task(
+                provider.acquire(
+                    url=target_url,
+                    format_id=format_id,
+                    destination_path=temp_destination,
+                    progress_callback=on_progress,
+                    timeout_seconds=settings.DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+                    max_size_bytes=settings.MAX_FILE_SIZE_BYTES
+                )
             )
+            watchdog_task = asyncio.create_task(stall_watchdog(acquire_task))
+
+            try:
+                acquire_result = await acquire_task
+            except asyncio.CancelledError:
+                elapsed = time.time() - last_progress_timestamp
+                if elapsed >= stall_timeout:
+                    reason = (
+                        f"0 bytes transferred after {int(elapsed)} seconds"
+                        if transferred_bytes_count == 0
+                        else f"Stream stalled with no progress received for {int(elapsed)} seconds"
+                    )
+                    temp_destination.unlink(missing_ok=True)
+                    logger.error(f"Job {job_id} failed due to download stall: {reason}")
+                    await self._fail_job(job_id, f"Download timed out: {reason}")
+                    return
+                raise
+            finally:
+                watchdog_task.cancel()
 
             # 2. Transition to VERIFYING
             async with async_session_factory() as session:

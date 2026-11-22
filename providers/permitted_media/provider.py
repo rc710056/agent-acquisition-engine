@@ -121,11 +121,6 @@ class PermittedMediaProvider(BaseProviderContract):
                 "no_warnings": True,
                 "extract_flat": False,
                 "skip_download": True,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android", "web"]
-                    }
-                }
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -152,24 +147,31 @@ class PermittedMediaProvider(BaseProviderContract):
 
                         def get_h_estimated_bytes(h_val: int) -> Optional[int]:
                             h_fmts = [f for f in video_formats if f.get("height") == h_val]
-                            best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: x.get("tbr") or x.get("vbr") or 0, reverse=True)), None)
-                            default_v = 4500 if h_val >= 1080 else (2500 if h_val >= 720 else (1200 if h_val >= 480 else 650))
+                            # Prefer format with real filesize/filesize_approx over speculative tbr
+                            best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: (x.get("filesize") or x.get("filesize_approx") or 0), reverse=True)), None)
+                            if not best_h_fmt or not (best_h_fmt.get("filesize") or best_h_fmt.get("filesize_approx")):
+                                best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: x.get("tbr") or x.get("vbr") or 0, reverse=True)), None)
+                            default_v = 3000 if h_val >= 1080 else (2000 if h_val >= 720 else (1000 if h_val >= 480 else 600))
                             v_bytes = estimate_stream_bytes(best_h_fmt, dur_sec, default_kbps=default_v)
                             if v_bytes or best_audio_bytes:
                                 return (v_bytes or 0) + (best_audio_bytes or 0)
                             return None
 
-                        max_h_size = get_h_estimated_bytes(max_h)
+                        # Pick highest resolution that fits within standard platform quota (<= 500 MB)
+                        quota_limit = 524_288_000
+                        acquirable_heights = [h for h in heights if (get_h_estimated_bytes(h) or 0) <= quota_limit]
+                        rec_h = acquirable_heights[0] if acquirable_heights else (min(heights[0], 1080) if heights else 1080)
+                        rec_h_size = get_h_estimated_bytes(rec_h)
 
                         # 1. BEST QUALITY COMPOSITE (VIDEO + AUDIO) - MUST BE FIRST!
                         formats.append(FormatOption(
                             format_id="best_video_audio",
                             file_type="video",
                             mime_type="video/mp4",
-                            resolution=f"{max_h}p",
+                            resolution=f"{rec_h}p",
                             codec="h264/aac",
-                            estimated_size_bytes=max_h_size,
-                            quality_label=f"★ Best Quality ({get_friendly_resolution_name(max_h)}) • with Audio",
+                            estimated_size_bytes=rec_h_size,
+                            quality_label=f"★ Best Quality ({get_friendly_resolution_name(rec_h)}) • with Audio",
                             has_audio=True,
                             has_video=True,
                             category="recommended"
@@ -402,7 +404,7 @@ class PermittedMediaProvider(BaseProviderContract):
                     h = m_h.group(1)
                     fmt_spec = f"bestvideo[height<={h}]+bestaudio/best[height<={h}][vcodec!=none]/best[vcodec!=none]"
                 else:
-                    fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]/bestvideo"
+                    fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]"
                 ext = "mp4"
 
             temp_stem = f"ytdl_{uuid.uuid4().hex[:8]}"
@@ -415,11 +417,6 @@ class PermittedMediaProvider(BaseProviderContract):
                 "quiet": True,
                 "no_warnings": True,
                 "overwrites": True,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android", "web"]
-                    }
-                }
             }
             if postprocessors:
                 ydl_opts["postprocessors"] = postprocessors

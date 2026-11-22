@@ -43,21 +43,66 @@ def infer_file_type_from_mime(mime: str, filename: str = "") -> str:
         return "text"
     return "binary"
 
+MIME_TO_EXTENSION: Dict[str, str] = {
+    "text/markdown": ".md",
+    "text/x-markdown": ".md",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "application/csv": ".csv",
+    "application/json": ".json",
+    "text/json": ".json",
+    "application/pdf": ".pdf",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "text/html": ".html",
+    "application/zip": ".zip",
+    "application/gzip": ".gz",
+    "application/x-tar": ".tar",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/x-matroska": ".mkv",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+}
+
 def extract_filename_from_headers(headers: httpx.Headers, url: str) -> str:
+    content_type_raw = headers.get("content-type", "")
+    clean_mime = content_type_raw.split(";")[0].strip().lower() if content_type_raw else ""
+    mapped_ext = MIME_TO_EXTENSION.get(clean_mime)
+    if not mapped_ext and clean_mime:
+        import mimetypes
+        guessed = mimetypes.guess_extension(clean_mime)
+        if guessed and guessed != ".bin":
+            mapped_ext = guessed
+
     cd = headers.get("content-disposition", "")
     if cd:
         match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', cd, flags=re.IGNORECASE)
         if match:
             raw_name = unquote(match.group(1).strip())
+            if "." not in raw_name and mapped_ext:
+                raw_name = f"{raw_name}{mapped_ext}"
             return sanitize_filename(raw_name)
 
     # Derive from URL path
     path = urlparse(url).path
     base = os.path.basename(path)
-    if base and "." in base:
-        return sanitize_filename(unquote(base))
+    if base:
+        unquoted_base = unquote(base).strip()
+        if unquoted_base:
+            if "." in unquoted_base:
+                return sanitize_filename(unquoted_base)
+            ext = mapped_ext or ".bin"
+            return sanitize_filename(f"{unquoted_base}{ext}")
 
-    return sanitize_filename(f"acquired_{uuid.uuid4().hex[:8]}.bin")
+    ext = mapped_ext or ".bin"
+    return sanitize_filename(f"acquired_{uuid.uuid4().hex[:8]}{ext}")
 
 class DirectHTTPProvider(BaseProviderContract):
     """
@@ -111,7 +156,12 @@ class DirectHTTPProvider(BaseProviderContract):
                 errors=[error or "SSRF check failed."]
             )
 
-        headers = {"User-Agent": "AgentAcquisitionEngine/1.0"}
+        headers = {
+            "User-Agent": "agent-acquisition-engine/0.2.0 (+https://github.com/rc710056/agent-acquisition-engine; bot)",
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, trust_env=False) as client:
             try:
                 resp = await send_with_safe_redirects(client, "HEAD", url, headers)
@@ -123,7 +173,25 @@ class DirectHTTPProvider(BaseProviderContract):
 
                 final_url = str(resp.url)
 
-                if resp.status_code in {401, 403}:
+                if resp.status_code in {403, 429, 503}:
+                    return SourceInspectionResponse(
+                        source_id=f"src_{uuid.uuid4().hex[:12]}",
+                        url=url,
+                        resolved_url=final_url,
+                        source_type=SourceType.SOURCE_BLOCKED,
+                        provider_id=self.provider_id,
+                        is_permitted=False,
+                        security_status=SecurityStatus.SAFE,
+                        acquisition_permission=AcquisitionPermission.RESTRICTED,
+                        source_access_status=SourceAccessStatus.BLOCKED,
+                        capabilities=[],
+                        mime_type=None,
+                        estimated_size_bytes=None,
+                        inspection_status="blocked",
+                        errors=[f"Source-side access blocked (HTTP {resp.status_code}): Automated requests are blocked or rate-limited by the host."]
+                    )
+
+                if resp.status_code == 401:
                     return SourceInspectionResponse(
                         source_id=f"src_{uuid.uuid4().hex[:12]}",
                         url=url,
@@ -265,7 +333,8 @@ class DirectHTTPProvider(BaseProviderContract):
         total_bytes: Optional[int] = None
 
         headers = {
-            "User-Agent": "AgentAcquisitionEngine/1.0",
+            "User-Agent": "agent-acquisition-engine/0.2.0 (+https://github.com/rc710056/agent-acquisition-engine; bot)",
+            "Accept": "*/*",
             "Accept-Encoding": "identity"
         }
 
@@ -277,11 +346,27 @@ class DirectHTTPProvider(BaseProviderContract):
                 logger.warning("Unable to read download metadata for %s: %s", url, e)
             else:
                 try:
-                    extracted_filename = extract_filename_from_headers(head_resp.headers, str(head_resp.url))
-                    mime_type = head_resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
-                    cl = head_resp.headers.get("content-length")
-                    if cl and cl.isdigit():
-                        total_bytes = int(cl)
+                    if head_resp.status_code in {405, 501}:
+                        await head_resp.aclose()
+                        ranged_headers = dict(headers)
+                        ranged_headers["Range"] = "bytes=0-0"
+                        head_resp = await send_with_safe_redirects(client, "GET", url, ranged_headers)
+
+                    if head_resp.status_code < 400:
+                        extracted_filename = extract_filename_from_headers(head_resp.headers, str(head_resp.url))
+                        raw_ct = head_resp.headers.get("content-type", "")
+                        if raw_ct:
+                            parsed_ct = raw_ct.split(";")[0].strip().lower()
+                            if parsed_ct:
+                                mime_type = parsed_ct
+                        cl = head_resp.headers.get("content-length")
+                        if cl and cl.isdigit():
+                            total_bytes = int(cl)
+                        elif "content-range" in head_resp.headers:
+                            cr = head_resp.headers.get("content-range", "")
+                            match = re.search(r"/(\d+)$", cr)
+                            if match:
+                                total_bytes = int(match.group(1))
                 finally:
                     await head_resp.aclose()
 
@@ -295,6 +380,33 @@ class DirectHTTPProvider(BaseProviderContract):
             timeout_seconds=timeout_seconds,
             max_size_bytes=max_size_bytes
         )
+
+        # Preserve server's content-type from download response if HEAD did not return specific MIME
+        dl_mime = (dl_res.get("content_type") or "").strip().lower()
+        if dl_mime and (mime_type == "application/octet-stream" or not mime_type):
+            mime_type = dl_mime
+
+        # If dl_res has headers and filename was generic, re-extract filename
+        if dl_res.get("headers") and (extracted_filename.endswith(".bin") or "." not in extracted_filename):
+            extracted_filename = extract_filename_from_headers(dl_res["headers"], url)
+
+        # Check if filename has extension matching known text formats
+        text_exts = {
+            "md": "text/markdown",
+            "markdown": "text/markdown",
+            "txt": "text/plain",
+            "csv": "text/csv",
+            "json": "application/json",
+            "pdf": "application/pdf",
+            "xml": "application/xml",
+        }
+        ext_clean = extracted_filename.rsplit(".", 1)[-1].lower() if "." in extracted_filename else ""
+        if ext_clean in text_exts and mime_type == "application/octet-stream":
+            mime_type = text_exts[ext_clean]
+
+        # Ensure filename extension matches text/csv/json/markdown MIME if it was defaulted to .bin
+        if extracted_filename.endswith(".bin") and mime_type in MIME_TO_EXTENSION:
+            extracted_filename = f"{extracted_filename[:-4]}{MIME_TO_EXTENSION[mime_type]}"
 
         return {
             "filename": extracted_filename,
