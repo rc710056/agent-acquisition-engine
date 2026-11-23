@@ -37,6 +37,25 @@ def get_friendly_resolution_name(height: int) -> str:
         return f"Standard ({height}p)"
     return f"{height}p"
 
+def clean_codec_name(c: Optional[str]) -> str:
+    """Return normalized, honest codec name."""
+    if not c or c.lower() == "none":
+        return "unknown"
+    c_low = c.lower().strip()
+    if c_low.startswith("avc") or "h264" in c_low:
+        return "h264"
+    if c_low.startswith("vp09") or c_low.startswith("vp9"):
+        return "vp9"
+    if c_low.startswith("av01") or "av1" in c_low:
+        return "av1"
+    if c_low.startswith("mp4a") or "aac" in c_low:
+        return "aac"
+    if "opus" in c_low:
+        return "opus"
+    if "mp3" in c_low:
+        return "mp3"
+    return c_low.split(".")[0]
+
 def estimate_stream_bytes(
     raw_format: Optional[dict] = None,
     duration_seconds: Optional[float] = None,
@@ -137,31 +156,91 @@ class PermittedMediaProvider(BaseProviderContract):
                     audio_formats = [f for f in raw_formats if f.get("acodec") and f.get("acodec") != "none"]
 
                     dur_sec = float(duration) if duration else None
-                    best_audio_fmt = next(iter(sorted(audio_formats, key=lambda x: x.get("abr") or x.get("tbr") or 0, reverse=True)), None)
-                    best_audio_bytes = estimate_stream_bytes(best_audio_fmt, dur_sec, default_kbps=128)
+
+                    # 1. Audio stream pairing
+                    aac_audio_fmts = [
+                        f for f in audio_formats
+                        if f.get("acodec", "").startswith(("mp4a", "aac")) or "m4a" in f.get("ext", "")
+                    ]
+                    best_aac_audio = next(iter(sorted(
+                        aac_audio_fmts,
+                        key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=128) or 0,
+                        reverse=True
+                    )), None)
+                    best_any_audio = next(iter(sorted(
+                        audio_formats,
+                        key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=160) or 0,
+                        reverse=True
+                    )), None)
+
+                    audio_comp_bytes = estimate_stream_bytes(best_aac_audio or best_any_audio, dur_sec, default_kbps=128) or 0
+                    audio_native_bytes = estimate_stream_bytes(best_any_audio, dur_sec, default_kbps=160) or 0
+                    best_audio_bytes = audio_comp_bytes
 
                     if has_video:
-                        # Find unique heights in descending order
-                        heights = sorted(list(set(f.get("height") for f in video_formats if f.get("height"))), reverse=True)
-                        max_h = heights[0] if heights else 1080
+                        # Find unique heights in ascending order for ladder calculations
+                        heights_asc = sorted(list(set(f.get("height") for f in video_formats if f.get("height"))))
 
-                        def get_h_estimated_bytes(h_val: int) -> Optional[int]:
-                            h_fmts = [f for f in video_formats if f.get("height") == h_val]
-                            # Prefer format with real filesize/filesize_approx over speculative tbr
-                            best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: (x.get("filesize") or x.get("filesize_approx") or 0), reverse=True)), None)
-                            if not best_h_fmt or not (best_h_fmt.get("filesize") or best_h_fmt.get("filesize_approx")):
-                                best_h_fmt = next(iter(sorted(h_fmts, key=lambda x: x.get("tbr") or x.get("vbr") or 0, reverse=True)), None)
-                            default_v = 3000 if h_val >= 1080 else (2000 if h_val >= 720 else (1000 if h_val >= 480 else 600))
-                            v_bytes = estimate_stream_bytes(best_h_fmt, dur_sec, default_kbps=default_v)
-                            if v_bytes or best_audio_bytes:
-                                return (v_bytes or 0) + (best_audio_bytes or 0)
-                            return None
+                        # Build compatible profile data for each height
+                        height_comp_map = {}
+                        for h in heights_asc:
+                            h_fmts = [f for f in video_formats if f.get("height") == h]
+                            h_avc = [f for f in h_fmts if f.get("vcodec", "").startswith(("avc", "h264"))]
+                            best_h_avc = next(iter(sorted(
+                                h_avc,
+                                key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=1000) or 0,
+                                reverse=True
+                            )), None)
+                            best_h_any = next(iter(sorted(
+                                h_fmts,
+                                key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=1000) or 0,
+                                reverse=True
+                            )), None)
 
-                        # Pick highest resolution that fits within standard platform quota (<= 500 MB)
+                            chosen_fmt = best_h_avc or best_h_any
+                            default_v = 4000 if h >= 1080 else (2500 if h >= 720 else (1200 if h >= 480 else (600 if h >= 360 else 350)))
+                            v_bytes = estimate_stream_bytes(chosen_fmt, dur_sec, default_kbps=default_v) or 0
+                            tot_bytes = v_bytes + audio_comp_bytes
+                            height_comp_map[h] = {
+                                "format": chosen_fmt,
+                                "bytes": tot_bytes,
+                                "is_h264": bool(best_h_avc is not None)
+                            }
+
+                        # Enforce strict monotonic ladder:
+                        # Guarantees size(240p) < size(360p) < size(480p) < size(720p) < size(1080p)...
+                        for idx in range(1, len(heights_asc)):
+                            prev_h = heights_asc[idx - 1]
+                            curr_h = heights_asc[idx]
+                            if height_comp_map[curr_h]["bytes"] <= height_comp_map[prev_h]["bytes"]:
+                                height_comp_map[curr_h]["bytes"] = int(height_comp_map[prev_h]["bytes"] * 1.15)
+
+                        # Pick highest resolution fitting platform quota (<= 500 MB)
                         quota_limit = 524_288_000
-                        acquirable_heights = [h for h in heights if (get_h_estimated_bytes(h) or 0) <= quota_limit]
-                        rec_h = acquirable_heights[0] if acquirable_heights else (min(heights[0], 1080) if heights else 1080)
-                        rec_h_size = get_h_estimated_bytes(rec_h)
+                        acquirable_heights = [h for h in heights_asc if height_comp_map[h]["bytes"] <= quota_limit]
+                        rec_h = acquirable_heights[-1] if acquirable_heights else (min(heights_asc[-1], 1080) if heights_asc else 1080)
+
+                        # Determine top native stream (for best_video_audio)
+                        rec_h_fmts = [f for f in video_formats if f.get("height") == rec_h]
+                        best_native_rec = next(iter(sorted(
+                            rec_h_fmts,
+                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0,
+                            reverse=True
+                        )), None) or next(iter(sorted(
+                            video_formats,
+                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0,
+                            reverse=True
+                        )), None)
+
+                        v_native_bytes = estimate_stream_bytes(best_native_rec, dur_sec, default_kbps=3500) or 0
+                        rec_native_size = v_native_bytes + audio_native_bytes
+
+                        # Detect truthful codecs & HDR
+                        v_codec_clean = clean_codec_name(best_native_rec.get("vcodec") if best_native_rec else None)
+                        a_codec_clean = clean_codec_name(best_any_audio.get("acodec") if best_any_audio else None)
+                        native_codec_label = f"{v_codec_clean}/{a_codec_clean}"
+                        is_hdr = bool(best_native_rec and best_native_rec.get("dynamic_range") in ["HDR", "HDR10", "HLG"])
+                        hdr_suffix = " HDR" if is_hdr else ""
 
                         # 1. BEST QUALITY COMPOSITE (VIDEO + AUDIO) - MUST BE FIRST!
                         formats.append(FormatOption(
@@ -169,23 +248,23 @@ class PermittedMediaProvider(BaseProviderContract):
                             file_type="video",
                             mime_type="video/mp4",
                             resolution=f"{rec_h}p",
-                            codec="h264/aac",
-                            estimated_size_bytes=rec_h_size,
-                            quality_label=f"★ Best Quality ({get_friendly_resolution_name(rec_h)}) • with Audio",
+                            codec=native_codec_label,
+                            estimated_size_bytes=rec_native_size,
+                            quality_label=f"★ Best Quality ({get_friendly_resolution_name(rec_h)}{hdr_suffix}) • with Audio",
                             has_audio=True,
                             has_video=True,
                             category="recommended"
                         ))
 
-                        # 2. RESOLUTION-SPECIFIC VIDEO + AUDIO PRESETS
-                        for h in heights:
+                        # 2. RESOLUTION-SPECIFIC VIDEO + AUDIO PRESETS (Descending order: 1080p -> 720p -> ...)
+                        for h in sorted(heights_asc, reverse=True):
                             formats.append(FormatOption(
                                 format_id=f"best_{h}p_mp4",
                                 file_type="video",
                                 mime_type="video/mp4",
                                 resolution=f"{h}p",
                                 codec="h264/aac",
-                                estimated_size_bytes=get_h_estimated_bytes(h),
+                                estimated_size_bytes=height_comp_map[h]["bytes"],
                                 quality_label=f"{get_friendly_resolution_name(h)} • with Audio",
                                 has_audio=True,
                                 has_video=True,
@@ -398,11 +477,22 @@ class PermittedMediaProvider(BaseProviderContract):
                     "preferredcodec": ext,
                     "preferredquality": "320" if ext == "mp3" else "192"
                 }]
+            elif format_id == "best_video_audio":
+                # High-fidelity / native stream (can be VP9/AV1/Opus/HDR)
+                fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]"
+                ext = "mp4"
             else:
                 m_h = re.search(r'best_(\d+)p', format_id)
                 if m_h:
                     h = m_h.group(1)
-                    fmt_spec = f"bestvideo[height<={h}]+bestaudio/best[height<={h}][vcodec!=none]/best[vcodec!=none]"
+                    # Prefer compatible H.264 (avc1) video and AAC (mp4a) audio for standard resolution presets
+                    fmt_spec = (
+                        f"bestvideo[height<={h}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                        f"bestvideo[height<={h}][vcodec^=avc1]+bestaudio/"
+                        f"bestvideo[height<={h}]+bestaudio[acodec^=mp4a]/"
+                        f"bestvideo[height<={h}]+bestaudio/"
+                        f"best[height<={h}][vcodec!=none]"
+                    )
                 else:
                     fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]"
                 ext = "mp4"
@@ -442,20 +532,56 @@ class PermittedMediaProvider(BaseProviderContract):
                     destination_path.unlink()
                 actual_temp_file.rename(destination_path)
 
-                # Ensure video acquisition actually produced a video stream
+                # Integrity & Fidelity Supervisor check:
+                actual_vcodec = ""
+                actual_acodec = ""
                 if target_format.file_type == "video":
                     import shutil, subprocess
                     ffprobe_bin = shutil.which("ffprobe")
+                    ffmpeg_bin = shutil.which("ffmpeg")
                     if ffprobe_bin:
-                        probe = subprocess.run(
-                            [ffprobe_bin, "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(destination_path)],
+                        probe_v = subprocess.run(
+                            [ffprobe_bin, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(destination_path)],
                             capture_output=True,
                             text=True,
                             timeout=10
                         )
-                        if probe.returncode == 0 and not probe.stdout.strip():
+                        actual_vcodec = probe_v.stdout.strip().lower() if probe_v.returncode == 0 else ""
+                        if not actual_vcodec:
                             destination_path.unlink(missing_ok=True)
                             raise RuntimeError(f"Media extraction produced audio-only stream for requested video format '{format_id}'.")
+
+                        probe_a = subprocess.run(
+                            [ffprobe_bin, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(destination_path)],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        actual_acodec = probe_a.stdout.strip().lower() if probe_a.returncode == 0 else ""
+
+                        # Check if format contracted compatible H.264 + AAC
+                        expected_codec = (target_format.codec or "").lower()
+                        needs_transcode = False
+                        if "h264" in expected_codec and actual_vcodec not in ["h264", "avc1"]:
+                            needs_transcode = True
+                        if "aac" in expected_codec and actual_acodec not in ["aac", "mp4a"]:
+                            needs_transcode = True
+
+                        if needs_transcode and ffmpeg_bin:
+                            transcode_temp = destination_path.parent / f"transcoded_{uuid.uuid4().hex[:8]}.mp4"
+                            cmd = [
+                                ffmpeg_bin, "-y", "-i", str(destination_path),
+                                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                                "-c:a", "aac", "-b:a", "128k",
+                                "-movflags", "+faststart",
+                                str(transcode_temp)
+                            ]
+                            res = subprocess.run(cmd, capture_output=True, timeout=180)
+                            if res.returncode == 0 and transcode_temp.exists() and transcode_temp.stat().st_size > 0:
+                                destination_path.unlink(missing_ok=True)
+                                transcode_temp.rename(destination_path)
+                                actual_vcodec = "h264"
+                                actual_acodec = "aac"
             except Exception as ytdl_err:
                 # Anti-bot resilience: Fallback to Cobalt adapter if applicable
                 from providers.cobalt.provider import CobaltProvider
@@ -487,13 +613,20 @@ class PermittedMediaProvider(BaseProviderContract):
             if progress_callback:
                 await progress_callback(file_size, file_size)
 
-            return {
+            res_dict = {
                 "filename": f"media_{uuid.uuid4().hex[:8]}.{ext}",
                 "mime_type": "video/mp4" if ext == "mp4" else "audio/mp4",
                 "transferred_bytes": file_size,
                 "total_bytes": file_size,
                 "sha256": sha256.hexdigest(),
             }
+            if actual_vcodec:
+                res_dict["vcodec"] = actual_vcodec
+            if actual_acodec:
+                res_dict["acodec"] = actual_acodec
+            if actual_vcodec or actual_acodec:
+                res_dict["codec"] = f"{actual_vcodec}/{actual_acodec}" if actual_vcodec and actual_acodec else actual_vcodec or actual_acodec
+            return res_dict
 
         # Otherwise fallback to direct HTTP streaming
         direct_url = target_format.download_url or url

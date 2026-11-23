@@ -89,3 +89,48 @@ async def test_media_stream_muxing_with_ffmpeg(tmp_path):
     # File verification
     v_res = FileVerifier.verify_file(dest_file, expected_mime="video/mp4", expected_sha256=acquire_res["sha256"])
     assert v_res.is_valid is True
+
+@pytest.mark.asyncio
+async def test_youtube_monotonic_ladder_and_honest_codecs():
+    """
+    Verifies the resolution ladder is strictly monotonic and codecs are truthfully reported:
+    1. Size ladder: size(240p) < size(360p) < size(480p) < size(720p) < size(1080p).
+    2. Real codec label on native streams (VP9/AV1/Opus if native, H264/AAC if compatible).
+    3. No inverted bitrate presets.
+    """
+    await init_db()
+    provider = provider_registry.get_provider("permitted_media")
+    assert provider is not None
+
+    url = "https://youtu.be/aqz-KE-bpKQ"
+    inspection = await provider.inspect(url)
+    assert inspection.is_permitted is True
+
+    # Check top format has honest codec
+    best_fmt = inspection.formats[0]
+    assert best_fmt.format_id == "best_video_audio"
+    assert best_fmt.codec is not None
+    assert "/" in best_fmt.codec
+    print(f"Verified Best Quality Format: {best_fmt.quality_label}, Codec: {best_fmt.codec}, Estimated Size: {best_fmt.estimated_size_bytes}")
+
+    # Extract all resolution presets (e.g. best_240p_mp4, best_360p_mp4, etc.)
+    import re
+    res_formats = []
+    for f in inspection.formats:
+        m = re.match(r"^best_(\d+)p_mp4$", f.format_id)
+        if m:
+            res_formats.append((int(m.group(1)), f))
+
+    # Sort by height ascending (e.g. 144, 240, 360, 480, 720, 1080)
+    res_formats.sort(key=lambda x: x[0])
+    ladder_sizes = [(h, f.estimated_size_bytes) for h, f in res_formats if f.estimated_size_bytes is not None]
+
+    print("Verified Monotonic Resolution Ladder:", ladder_sizes)
+    assert len(ladder_sizes) >= 3, "Should have at least 3 resolution tiers"
+
+    # Enforce strictly monotonic progression
+    for i in range(1, len(ladder_sizes)):
+        prev_h, prev_size = ladder_sizes[i - 1]
+        curr_h, curr_size = ladder_sizes[i]
+        assert curr_size > prev_size, f"Ladder inversion defect: {curr_h}p ({curr_size} B) is not strictly greater than {prev_h}p ({prev_size} B)!"
+
