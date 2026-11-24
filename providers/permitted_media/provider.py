@@ -141,6 +141,8 @@ class PermittedMediaProvider(BaseProviderContract):
                 "no_warnings": True,
                 "extract_flat": False,
                 "skip_download": True,
+                "js_runtimes": {"node": {"path": "node"}},
+                "remote_components": ["ejs:github"],
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -221,15 +223,34 @@ class PermittedMediaProvider(BaseProviderContract):
                         acquirable_heights = [h for h in heights_asc if height_comp_map[h]["bytes"] <= quota_limit]
                         rec_h = acquirable_heights[-1] if acquirable_heights else (min(heights_asc[-1], 1080) if heights_asc else 1080)
 
-                        # Determine top native stream (for best_video_audio)
+                        # Determine top native stream (for best_video_audio matching yt-dlp's actual format selection)
+                        def yt_codec_score(f):
+                            vc = (f.get("vcodec") or "").lower()
+                            if vc.startswith("av01") or "av1" in vc: return 3
+                            if vc.startswith("vp09") or "vp9" in vc: return 2
+                            if vc.startswith("avc") or "h264" in vc: return 1
+                            return 0
+
                         rec_h_fmts = [f for f in video_formats if f.get("height") == rec_h]
                         best_native_rec = next(iter(sorted(
                             rec_h_fmts,
-                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0,
+                            key=lambda x: (yt_codec_score(x), estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0),
                             reverse=True
                         )), None) or next(iter(sorted(
                             video_formats,
-                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0,
+                            key=lambda x: (yt_codec_score(x), estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0),
+                            reverse=True
+                        )), None)
+
+                        def yt_audio_score(f):
+                            ac = (f.get("acodec") or "").lower()
+                            if "opus" in ac: return 2
+                            if "aac" in ac or "mp4a" in ac: return 1
+                            return 0
+
+                        best_any_audio = next(iter(sorted(
+                            audio_formats,
+                            key=lambda x: (yt_audio_score(x), estimate_stream_bytes(x, dur_sec, default_kbps=160) or 0),
                             reverse=True
                         )), None)
 
@@ -243,7 +264,23 @@ class PermittedMediaProvider(BaseProviderContract):
                         is_hdr = bool(best_native_rec and best_native_rec.get("dynamic_range") in ["HDR", "HDR10", "HLG"])
                         hdr_suffix = " HDR" if is_hdr else ""
 
-                        # 1. BEST QUALITY COMPOSITE (VIDEO + AUDIO) - MUST BE FIRST!
+                        # 1. UNIVERSAL COMPATIBLE (H.264 + AAC, SDR) - Guaranteed to play everywhere
+                        comp_h = min(rec_h, 1080)
+                        comp_size = height_comp_map.get(comp_h, {}).get("bytes", rec_native_size)
+                        formats.append(FormatOption(
+                            format_id="best_compatible_mp4",
+                            file_type="video",
+                            mime_type="video/mp4",
+                            resolution=f"{comp_h}p",
+                            codec="h264/aac",
+                            estimated_size_bytes=comp_size,
+                            quality_label=f"★ Compatible ({get_friendly_resolution_name(comp_h)} H.264/AAC, SDR) • Plays Everywhere",
+                            has_audio=True,
+                            has_video=True,
+                            category="recommended"
+                        ))
+
+                        # 2. BEST QUALITY COMPOSITE (NATIVE STREAM)
                         formats.append(FormatOption(
                             format_id="best_video_audio",
                             file_type="video",
@@ -257,16 +294,23 @@ class PermittedMediaProvider(BaseProviderContract):
                             category="recommended"
                         ))
 
-                        # 2. RESOLUTION-SPECIFIC VIDEO + AUDIO PRESETS (Descending order: 1080p -> 720p -> ...)
+                        # 3. RESOLUTION-SPECIFIC VIDEO + AUDIO PRESETS (Descending order: 1080p -> 720p -> ...)
                         for h in sorted(heights_asc, reverse=True):
+                            is_avc = height_comp_map[h]["is_h264"]
+                            chosen_fmt = height_comp_map[h]["format"]
+                            h_vcodec = "h264" if is_avc else clean_codec_name(chosen_fmt.get("vcodec"))
+                            h_acodec = "aac" if is_avc else clean_codec_name(best_any_audio.get("acodec"))
+                            h_codec_label = f"{h_vcodec}/{h_acodec}"
+                            h_qual_tag = "H.264" if is_avc else h_vcodec.upper()
+
                             formats.append(FormatOption(
                                 format_id=f"best_{h}p_mp4",
                                 file_type="video",
                                 mime_type="video/mp4",
                                 resolution=f"{h}p",
-                                codec="h264/aac",
+                                codec=h_codec_label,
                                 estimated_size_bytes=height_comp_map[h]["bytes"],
-                                quality_label=f"{get_friendly_resolution_name(h)} • with Audio",
+                                quality_label=f"{get_friendly_resolution_name(h)} ({h_qual_tag}) • with Audio",
                                 has_audio=True,
                                 has_video=True,
                                 category="recommended"
@@ -478,6 +522,15 @@ class PermittedMediaProvider(BaseProviderContract):
                     "preferredcodec": ext,
                     "preferredquality": "320" if ext == "mp3" else "192"
                 }]
+            elif format_id in ["best_compatible_mp4", "best_compatible"]:
+                fmt_spec = (
+                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/"
+                    "bestvideo[height<=1080]+bestaudio[acodec^=mp4a]/"
+                    "bestvideo[height<=1080]+bestaudio/"
+                    "best[height<=1080][vcodec!=none]"
+                )
+                ext = "mp4"
             elif format_id == "best_video_audio":
                 # High-fidelity / native stream (can be VP9/AV1/Opus/HDR)
                 fmt_spec = "bestvideo+bestaudio/best[vcodec!=none]"
@@ -508,6 +561,8 @@ class PermittedMediaProvider(BaseProviderContract):
                 "quiet": True,
                 "no_warnings": True,
                 "overwrites": True,
+                "js_runtimes": {"node": {"path": "node"}},
+                "remote_components": ["ejs:github"],
             }
             if postprocessors:
                 ydl_opts["postprocessors"] = postprocessors
