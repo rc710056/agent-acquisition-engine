@@ -277,18 +277,27 @@ class PermittedMediaProvider(BaseProviderContract):
                         ))
                     else:
                         # Multi-stream media with separate video and audio tracks (e.g. YouTube, Vimeo)
+                        target_audio_pool = split_audio_formats if split_audio_formats else audio_formats
+                        target_video_pool = split_video_formats if split_video_formats else video_formats
+
                         aac_audio_fmts = [
-                            f for f in audio_formats
+                            f for f in target_audio_pool
                             if f.get("acodec", "").startswith(("mp4a", "aac")) or "m4a" in f.get("ext", "")
                         ]
+
+                        def sort_audio_stream(f):
+                            is_direct = 1 if (f.get("protocol") == "https" or f.get("filesize") or f.get("filesize_approx")) else 0
+                            sz = estimate_stream_bytes(f, dur_sec, default_kbps=128) or 0
+                            return (is_direct, sz)
+
                         best_aac_audio = next(iter(sorted(
                             aac_audio_fmts,
-                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=128) or 0,
+                            key=sort_audio_stream,
                             reverse=True
                         )), None)
                         best_any_audio = next(iter(sorted(
-                            audio_formats,
-                            key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=160) or 0,
+                            target_audio_pool,
+                            key=sort_audio_stream,
                             reverse=True
                         )), None)
 
@@ -297,20 +306,26 @@ class PermittedMediaProvider(BaseProviderContract):
                         best_audio_bytes = audio_comp_bytes
 
                         if has_video:
-                            heights_asc = sorted(list(set(f.get("height") for f in video_formats if f.get("height"))))
+                            heights_asc = sorted(list(set(f.get("height") for f in target_video_pool if f.get("height"))))
+
+                            def sort_video_stream(f):
+                                is_direct = 1 if (f.get("protocol") == "https" or f.get("filesize") or f.get("filesize_approx")) else 0
+                                is_mp4 = 1 if f.get("ext") == "mp4" else 0
+                                sz = estimate_stream_bytes(f, dur_sec, default_kbps=1000) or 0
+                                return (is_direct, is_mp4, sz)
 
                             height_comp_map = {}
                             for h in heights_asc:
-                                h_fmts = [f for f in video_formats if f.get("height") == h]
+                                h_fmts = [f for f in target_video_pool if f.get("height") == h]
                                 h_avc = [f for f in h_fmts if f.get("vcodec", "").startswith(("avc", "h264"))]
                                 best_h_avc = next(iter(sorted(
                                     h_avc,
-                                    key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=1000) or 0,
+                                    key=sort_video_stream,
                                     reverse=True
-                                )), None)
+                                )), None) if h_avc else None
                                 best_h_any = next(iter(sorted(
                                     h_fmts,
-                                    key=lambda x: estimate_stream_bytes(x, dur_sec, default_kbps=1000) or 0,
+                                    key=sort_video_stream,
                                     reverse=True
                                 )), None)
 
@@ -330,11 +345,7 @@ class PermittedMediaProvider(BaseProviderContract):
                                 curr_h = heights_asc[idx]
                                 if height_comp_map[curr_h]["bytes"] and height_comp_map[prev_h]["bytes"]:
                                     if height_comp_map[curr_h]["bytes"] <= height_comp_map[prev_h]["bytes"]:
-                                        height_comp_map[curr_h]["bytes"] = int(height_comp_map[prev_h]["bytes"] * 1.15)
-
-                            quota_limit = 524_288_000
-                            acquirable_heights = [h for h in heights_asc if not height_comp_map[h]["bytes"] or height_comp_map[h]["bytes"] <= quota_limit]
-                            rec_h = acquirable_heights[-1] if acquirable_heights else (min(heights_asc[-1], 1080) if heights_asc else 1080)
+                                        height_comp_map[curr_h]["bytes"] = int(height_comp_map[prev_h]["bytes"] * 1.08)
 
                             def yt_codec_score(f):
                                 vc = (f.get("vcodec") or "").lower()
@@ -343,28 +354,31 @@ class PermittedMediaProvider(BaseProviderContract):
                                 if vc.startswith("avc") or "h264" in vc: return 1
                                 return 0
 
-                            rec_h_fmts = [f for f in video_formats if f.get("height") == rec_h]
-                            best_native_rec = next(iter(sorted(
-                                rec_h_fmts,
-                                key=lambda x: (yt_codec_score(x), estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0),
+                            # True native master: highest available resolution without arbitrary quota capping
+                            master_h = heights_asc[-1] if heights_asc else 1080
+                            master_h_fmts = [f for f in target_video_pool if f.get("height") == master_h]
+                            best_native_master = next(iter(sorted(
+                                master_h_fmts,
+                                key=lambda x: (yt_codec_score(x), sort_video_stream(x)),
                                 reverse=True
                             )), None) or next(iter(sorted(
-                                video_formats,
-                                key=lambda x: (yt_codec_score(x), estimate_stream_bytes(x, dur_sec, default_kbps=3000) or 0),
+                                target_video_pool,
+                                key=lambda x: (yt_codec_score(x), sort_video_stream(x)),
                                 reverse=True
                             )), None)
 
-                            v_native_bytes = estimate_stream_bytes(best_native_rec, dur_sec, default_kbps=3500)
-                            rec_native_size = (v_native_bytes + (audio_native_bytes or 0)) if v_native_bytes else None
+                            v_native_bytes = estimate_stream_bytes(best_native_master, dur_sec, default_kbps=3500)
+                            master_native_size = (v_native_bytes + (audio_native_bytes or 0)) if v_native_bytes else None
 
-                            v_codec_clean = clean_codec_name(best_native_rec.get("vcodec") if best_native_rec else None)
+                            v_codec_clean = clean_codec_name(best_native_master.get("vcodec") if best_native_master else None)
                             a_codec_clean = clean_codec_name(best_any_audio.get("acodec") if best_any_audio else None)
                             native_codec_label = f"{v_codec_clean}/{a_codec_clean}"
-                            is_hdr = bool(best_native_rec and best_native_rec.get("dynamic_range") in ["HDR", "HDR10", "HLG"])
+                            is_hdr = bool(best_native_master and best_native_master.get("dynamic_range") in ["HDR", "HDR10", "HLG"])
                             hdr_suffix = " HDR" if is_hdr else ""
 
-                            comp_h = min(rec_h, 1080)
-                            comp_size = height_comp_map.get(comp_h, {}).get("bytes", rec_native_size)
+                            # Best compatible stream: highest player-safe stream up to 1080p
+                            comp_h = min(heights_asc[-1], 1080) if heights_asc else 1080
+                            comp_size = height_comp_map.get(comp_h, {}).get("bytes") or master_native_size
                             formats.append(FormatOption(
                                 format_id="best_compatible_mp4",
                                 file_type="video",
@@ -384,10 +398,10 @@ class PermittedMediaProvider(BaseProviderContract):
                                 format_id="best_video_audio",
                                 file_type="video",
                                 mime_type="video/mp4",
-                                resolution=f"{rec_h}p",
+                                resolution=f"{master_h}p",
                                 codec=native_codec_label,
-                                estimated_size_bytes=rec_native_size,
-                                quality_label=f"★ Best Quality ({get_friendly_resolution_name(rec_h)}{hdr_suffix}) • with Audio",
+                                estimated_size_bytes=master_native_size,
+                                quality_label=f"★ Best Quality ({get_friendly_resolution_name(master_h)}{hdr_suffix}) • with Audio",
                                 has_audio=True,
                                 has_video=True,
                                 category="recommended",
