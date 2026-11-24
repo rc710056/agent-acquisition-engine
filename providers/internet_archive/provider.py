@@ -268,7 +268,9 @@ class InternetArchiveProvider(BaseProviderContract):
         # Sort files: if target_file is requested, put it first. Then video, audio, documents, others.
         for f in files:
             filename = f.get("name", "")
-            if not filename or filename.startswith(".") or filename.endswith(("_meta.xml", "_meta.sqlite", "_files.xml", "_reviews.xml", "_archive.torrent")):
+            if not filename or filename.startswith(".") or filename.endswith(("_meta.xml", "_meta.sqlite", "_files.xml", "_reviews.xml", "_archive.torrent", ".torrent", "_spectrogram.png", "_waveform.png", "_itemimage.png")):
+                continue
+            if "_thumb" in filename.lower():
                 continue
 
             ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -307,7 +309,9 @@ class InternetArchiveProvider(BaseProviderContract):
                 download_url=dl_url,
                 has_audio=has_audio,
                 has_video=has_video,
-                category=cat
+                category=cat,
+                status="ready",
+                status_reason="Verified accessible on Internet Archive"
             )
 
             if is_match and not recommended_format:
@@ -360,8 +364,25 @@ class InternetArchiveProvider(BaseProviderContract):
         # Prioritize recommended format at index 0 and mark category
         if recommended_format:
             recommended_format.category = "recommended"
-            formats.remove(recommended_format)
+            if recommended_format in formats:
+                formats.remove(recommended_format)
             formats.insert(0, recommended_format)
+
+        # Curate format list if excessively long (e.g. 106 files) into a clean, actionable list of top primary formats
+        if len(formats) > 8:
+            curated: List[FormatOption] = []
+            if recommended_format:
+                curated.append(recommended_format)
+            # Add top video formats (up to 3)
+            v_fmts = [f for f in formats if f.file_type == "video" and f != recommended_format]
+            curated.extend(v_fmts[:3])
+            # Add top audio formats (up to 2)
+            a_fmts = [f for f in formats if f.file_type == "audio" and f != recommended_format]
+            curated.extend(a_fmts[:2])
+            # Add primary archive or doc (up to 2)
+            o_fmts = [f for f in formats if f.file_type in ("archive", "document") and f != recommended_format]
+            curated.extend(o_fmts[:2])
+            formats = curated
 
         thumbnail_url = f"https://archive.org/services/img/{identifier}"
 

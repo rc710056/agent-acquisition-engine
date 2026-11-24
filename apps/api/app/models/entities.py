@@ -89,6 +89,8 @@ class SourceOption(Base):
     has_audio = Column(Boolean, nullable=True)
     has_video = Column(Boolean, nullable=True)
     category = Column(String(50), default="recommended", nullable=True)
+    status = Column(String(50), default="ready", nullable=False)
+    status_reason = Column(Text, nullable=True)
 
     source = relationship("Source", back_populates="options")
 

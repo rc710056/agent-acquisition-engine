@@ -23,6 +23,10 @@ from apps.api.app.security.ssrf import SSRFValidator
 from apps.api.app.security.sanitization import sanitize_filename
 from apps.api.app.services.verification import FileVerifier, VerificationResult
 
+# In-memory health check cache: api_url -> (is_healthy, timestamp)
+_COBALT_HEALTH_CACHE: Dict[str, tuple[bool, float]] = {}
+_COBALT_HEALTH_TTL: float = 60.0  # seconds
+
 class CobaltProvider(BaseProviderContract):
     """
     Cobalt Universal Media Adapter.
@@ -41,6 +45,37 @@ class CobaltProvider(BaseProviderContract):
 
     def __init__(self, api_url: Optional[str] = None):
         self.api_url = (api_url or os.environ.get("COBALT_API_URL", "http://127.0.0.1:9000")).rstrip("/")
+
+    async def check_health(self) -> bool:
+        """
+        Performs a rapid health probe against the configured Cobalt instance with TTL caching.
+        Returns True only if the Cobalt server is reachable and responsive.
+        """
+        import time
+        now = time.time()
+        if self.api_url in _COBALT_HEALTH_CACHE:
+            is_healthy, ts = _COBALT_HEALTH_CACHE[self.api_url]
+            if now - ts < _COBALT_HEALTH_TTL:
+                return is_healthy
+
+        healthy = False
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(f"{self.api_url}/api/serverInfo")
+                if resp.status_code in (200, 204, 404):
+                    healthy = True
+        except Exception:
+            try:
+                # Fallback probe to root
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get(f"{self.api_url}/")
+                    if resp.status_code < 500:
+                        healthy = True
+            except Exception:
+                healthy = False
+
+        _COBALT_HEALTH_CACHE[self.api_url] = (healthy, now)
+        return healthy
 
     @property
     def provider_id(self) -> str:
@@ -74,6 +109,130 @@ class CobaltProvider(BaseProviderContract):
                 errors=[error or "SSRF check failed."]
             )
 
+        # Probe Cobalt health before advertising availability
+        is_alive = await self.check_health()
+        if not is_alive:
+            offline_reason = f"Cobalt service unreachable at {self.api_url}. Backend is offline."
+            unavailable_formats = [
+                FormatOption(
+                    format_id="cobalt_best_video",
+                    file_type="video",
+                    mime_type="video/mp4",
+                    resolution="1920x1080",
+                    codec="h264+aac",
+                    estimated_size_bytes=None,
+                    quality_label="Cobalt Resilient Stream (1080p Full HD)",
+                    category="recommended",
+                    has_audio=True,
+                    has_video=True,
+                    status="unavailable",
+                    status_reason=offline_reason
+                ),
+                FormatOption(
+                    format_id="cobalt_audio",
+                    file_type="audio",
+                    mime_type="audio/mpeg",
+                    resolution=None,
+                    codec="mp3",
+                    estimated_size_bytes=None,
+                    quality_label="Cobalt Audio Track (MP3 320k)",
+                    category="audio_only",
+                    has_audio=True,
+                    has_video=False,
+                    status="unavailable",
+                    status_reason=offline_reason
+                )
+            ]
+            return SourceInspectionResponse(
+                source_id=f"src_{uuid.uuid4().hex[:12]}",
+                url=url,
+                resolved_url=url,
+                source_type=SourceType.PLATFORM_MEDIA_PAGE,
+                provider_id=self.provider_id,
+                is_permitted=False,
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.UNAVAILABLE,
+                capabilities=[],
+                mime_type="video/mp4",
+                estimated_size_bytes=None,
+                inspection_status="failed",
+                title=f"Media via Cobalt ({urlparse(url).netloc})",
+                thumbnail_url=None,
+                formats=unavailable_formats,
+                assets=[],
+                errors=[offline_reason]
+            )
+
+        # If Cobalt is alive, probe the actual media target with Cobalt
+        probe_payload = {
+            "url": url,
+            "videoQuality": "1080",
+            "audioFormat": "mp3",
+            "downloadMode": "auto"
+        }
+        probe_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "AgentAcquisitionEngine/0.1.0"
+        }
+        cobalt_data = None
+        probe_err = None
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                for ep in [f"{self.api_url}/", f"{self.api_url}/api/json"]:
+                    try:
+                        r = await client.post(ep, json=probe_payload, headers=probe_headers)
+                        if r.status_code in (200, 201):
+                            cobalt_data = r.json()
+                            break
+                        else:
+                            probe_err = f"Cobalt returned HTTP {r.status_code}"
+                    except Exception as e:
+                        probe_err = str(e)
+        except Exception as e:
+            probe_err = str(e)
+
+        if not cobalt_data or cobalt_data.get("status") == "error":
+            err_reason = (cobalt_data.get("text") if cobalt_data else None) or probe_err or "Cobalt extraction failed for URL"
+            formats = [
+                FormatOption(
+                    format_id="cobalt_best_video",
+                    file_type="video",
+                    mime_type="video/mp4",
+                    resolution="1920x1080",
+                    codec="h264+aac",
+                    estimated_size_bytes=None,
+                    quality_label="Cobalt Resilient Stream (1080p Full HD)",
+                    category="recommended",
+                    has_audio=True,
+                    has_video=True,
+                    status="unavailable",
+                    status_reason=err_reason
+                )
+            ]
+            return SourceInspectionResponse(
+                source_id=f"src_{uuid.uuid4().hex[:12]}",
+                url=url,
+                resolved_url=url,
+                source_type=SourceType.PLATFORM_MEDIA_PAGE,
+                provider_id=self.provider_id,
+                is_permitted=False,
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.RESTRICTED,
+                source_access_status=SourceAccessStatus.UNAVAILABLE,
+                capabilities=[],
+                mime_type="video/mp4",
+                estimated_size_bytes=None,
+                inspection_status="failed",
+                title=f"Media via Cobalt ({urlparse(url).netloc})",
+                thumbnail_url=None,
+                formats=formats,
+                assets=[],
+                errors=[err_reason]
+            )
+
+        # Probed successfully
         formats = [
             FormatOption(
                 format_id="cobalt_best_video",
@@ -85,7 +244,9 @@ class CobaltProvider(BaseProviderContract):
                 quality_label="★ Cobalt Resilient Stream (Best Quality 1080p Full HD) • with Audio",
                 category="recommended",
                 has_audio=True,
-                has_video=True
+                has_video=True,
+                status="ready",
+                status_reason="Verified reachable via Cobalt anti-bot adapter"
             ),
             FormatOption(
                 format_id="cobalt_audio",
@@ -97,7 +258,9 @@ class CobaltProvider(BaseProviderContract):
                 quality_label="Cobalt High-Fidelity Audio Track (MP3 320k)",
                 category="audio_only",
                 has_audio=True,
-                has_video=False
+                has_video=False,
+                status="ready",
+                status_reason="Verified reachable via Cobalt audio extractor"
             )
         ]
 

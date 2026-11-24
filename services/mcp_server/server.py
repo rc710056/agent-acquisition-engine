@@ -339,9 +339,10 @@ async def inspect_source(
             await session.flush()
             source_id = new_source.id
 
-        formats = []
-        if inspection.is_permitted:
-            formats = inspection.formats or await provider.list_formats(url)
+        formats = inspection.formats or []
+        if not formats and inspection.is_permitted:
+            formats = await provider.list_formats(url)
+        if formats:
             from sqlalchemy import delete
             await session.execute(delete(SourceOption).where(SourceOption.source_id == source_id))
             for fmt in formats:
@@ -357,7 +358,9 @@ async def inspect_source(
                     download_url=fmt.download_url,
                     has_audio=fmt.has_audio,
                     has_video=fmt.has_video,
-                    category=fmt.category
+                    category=fmt.category,
+                    status=getattr(fmt, "status", "ready") or "ready",
+                    status_reason=getattr(fmt, "status_reason", None)
                 ))
         await session.commit()
 
@@ -450,7 +453,9 @@ async def list_formats(
                 "quality_label": opt.quality_label,
                 "has_audio": opt.has_audio,
                 "has_video": opt.has_video,
-                "category": opt.category
+                "category": opt.category,
+                "status": getattr(opt, "status", "ready") or "ready",
+                "status_reason": getattr(opt, "status_reason", None)
             }
             for opt in options
         ]
@@ -1160,109 +1165,143 @@ async def preview_media(
     has_video = any(f.get("file_type") == "video" or f.get("has_video") for f in formats)
     has_audio = any(f.get("file_type") == "audio" or f.get("has_audio") for f in formats)
 
+    def _format_size(sz_bytes: Optional[int]) -> str:
+        if sz_bytes and sz_bytes > 0:
+            if sz_bytes >= 1_048_576:
+                return f"~{sz_bytes / 1_048_576:.1f} MB"
+            return f"{sz_bytes // 1024} KB"
+        return "Unknown (Approval Required)"
+
     options = []
-    comp_fmt = next((f for f in formats if f.get("format_id") in ["best_compatible_mp4", "best_compatible"]), None)
-    if comp_fmt or has_video:
-        target_f = comp_fmt or next((f for f in formats if f.get("file_type") == "video"), None)
-        sz_b = target_f.get("estimated_size_bytes") if target_f else None
-        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Standard Size"
-        res_str = target_f.get("resolution") or "1080p"
-        options.append({
-            "action": "download_compatible_video",
-            "format_type": "video",
-            "format_id": target_f.get("format_id") if target_f else "best_compatible_mp4",
-            "resolution": res_str,
-            "codec": "H.264 / AAC",
-            "estimated_size": sz_str,
-            "label": f"🎥 Universal Compatible Video ({res_str} H.264/AAC)",
-            "description": "Recommended for universal playback on QuickTime, iPhone, Safari, TVs, and web browsers with zero codec issues.",
-            "recommended": True
-        })
+    # If all formats in inspection are marked unavailable (e.g. Cobalt is down, or anti-bot challenge)
+    all_unavailable = bool(formats and all(f.get("status") == "unavailable" for f in formats))
 
-    master_fmt = next((f for f in formats if f.get("format_id") == "best_video_audio"), None)
-    if master_fmt and (not comp_fmt or master_fmt.get("resolution") != comp_fmt.get("resolution") or master_fmt.get("codec") != comp_fmt.get("codec")):
-        sz_b = master_fmt.get("estimated_size_bytes")
-        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Original Size"
-        res_str = master_fmt.get("resolution") or "Native"
-        options.append({
-            "action": "download_master_video",
-            "format_type": "video",
-            "format_id": master_fmt.get("format_id"),
-            "resolution": res_str,
-            "codec": master_fmt.get("codec") or "Native",
-            "estimated_size": sz_str,
-            "label": f"🌟 Native Master Video ({res_str} {master_fmt.get('codec') or ''})",
-            "description": "Highest original fidelity direct from creator master upload (may use modern AV1/VP9 codecs).",
-            "recommended": False
-        })
-
-    compact_fmt = next((f for f in formats if f.get("format_id") in ["best_720p_mp4", "best_804p_mp4", "best_360p_mp4", "best_358p_mp4"]), None)
-    if compact_fmt and (not comp_fmt or compact_fmt.get("format_id") != comp_fmt.get("format_id")):
-        sz_b = compact_fmt.get("estimated_size_bytes")
-        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Compact Size"
-        options.append({
-            "action": "download_compact_video",
-            "format_type": "video",
-            "format_id": compact_fmt.get("format_id"),
-            "resolution": compact_fmt.get("resolution") or "Standard",
-            "codec": compact_fmt.get("codec") or "H.264",
-            "estimated_size": sz_str,
-            "label": f"📱 Balanced / Mobile Video ({compact_fmt.get('resolution')} {compact_fmt.get('codec') or ''})",
-            "description": "Fast download optimized for smaller file size, mobile devices, and low bandwidth.",
-            "recommended": False
-        })
-
-    mp3_fmt = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None)
-    if mp3_fmt or has_audio:
-        sz_b = mp3_fmt.get("estimated_size_bytes") if mp3_fmt else None
-        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Audio"
-        options.append({
-            "action": "extract_audio_mp3",
-            "format_type": "audio",
-            "format_id": "best_audio_mp3",
-            "resolution": "Audio Only",
-            "codec": "MP3 (320 kbps)",
-            "estimated_size": sz_str,
-            "label": "🎵 Universal MP3 Soundtrack (320 kbps)",
-            "description": "High-bitrate standalone audio track, compatible with all music players and car stereos.",
-            "recommended": False
-        })
-
-    m4a_fmt = next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None)
-    if m4a_fmt:
-        sz_b = m4a_fmt.get("estimated_size_bytes")
-        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Audio"
-        options.append({
-            "action": "extract_audio_aac",
-            "format_type": "audio",
-            "format_id": "best_audio_m4a",
-            "resolution": "Audio Only",
-            "codec": "AAC / M4A",
-            "estimated_size": sz_str,
-            "label": "🎧 Studio Master AAC Audio (M4A)",
-            "description": "Direct digital audio track with pristine frequency preservation for editing and archival.",
-            "recommended": False
-        })
-
-    if not options:
-        for f in formats[:4]:
+    if all_unavailable:
+        for f in formats:
             options.append({
-                "action": "download_file",
-                "format_type": f.get("file_type") or "document",
+                "action": "unavailable",
+                "format_type": f.get("file_type") or "media",
                 "format_id": f.get("format_id"),
                 "resolution": f.get("resolution") or "-",
-                "codec": f.get("codec") or f.get("mime_type"),
-                "estimated_size": f"~{f['estimated_size_bytes'] // 1_048_576} MB" if f.get("estimated_size_bytes") else "Original",
-                "label": f"📦 Download {f.get('quality_label', 'Original File')} ({f.get('mime_type')})",
-                "description": "Direct original asset download preserving native file integrity.",
-                "recommended": f == formats[0]
+                "codec": f.get("codec") or "-",
+                "estimated_size": _format_size(f.get("estimated_size_bytes")),
+                "label": f.get("quality_label") or "Media Stream",
+                "description": f"Unavailable: {f.get('status_reason') or 'Service is offline or media stream not exposed.'}",
+                "status": "unavailable",
+                "status_reason": f.get("status_reason"),
+                "recommended": False
             })
+    else:
+        comp_fmt = next((f for f in formats if f.get("format_id") in ["best_compatible_mp4", "best_compatible"]), None)
+        if comp_fmt or has_video:
+            target_f = comp_fmt or next((f for f in formats if f.get("file_type") == "video"), None)
+            sz_b = target_f.get("estimated_size_bytes") if target_f else None
+            res_str = target_f.get("resolution") or "1080p"
+            c_codec = target_f.get("codec") or "H.264 / AAC"
+            options.append({
+                "action": "download_compatible_video",
+                "format_type": "video",
+                "format_id": target_f.get("format_id") if target_f else "best_compatible_mp4",
+                "resolution": res_str,
+                "codec": c_codec,
+                "estimated_size": _format_size(sz_b),
+                "label": f"🎥 Universal Compatible Video ({res_str} {c_codec})",
+                "description": "Recommended for universal playback on QuickTime, iPhone, Safari, TVs, and web browsers.",
+                "status": target_f.get("status", "ready") if target_f else "ready",
+                "status_reason": target_f.get("status_reason") if target_f else None,
+                "recommended": True
+            })
+
+        master_fmt = next((f for f in formats if f.get("format_id") == "best_video_audio"), None)
+        if master_fmt and (not comp_fmt or master_fmt.get("resolution") != comp_fmt.get("resolution") or master_fmt.get("codec") != comp_fmt.get("codec")):
+            sz_b = master_fmt.get("estimated_size_bytes")
+            res_str = master_fmt.get("resolution") or "Native"
+            options.append({
+                "action": "download_master_video",
+                "format_type": "video",
+                "format_id": master_fmt.get("format_id"),
+                "resolution": res_str,
+                "codec": master_fmt.get("codec") or "Native",
+                "estimated_size": _format_size(sz_b),
+                "label": f"🌟 Native Master Video ({res_str} {master_fmt.get('codec') or ''})",
+                "description": "Highest original fidelity direct from creator master upload.",
+                "status": master_fmt.get("status", "ready"),
+                "status_reason": master_fmt.get("status_reason"),
+                "recommended": False
+            })
+
+        compact_fmt = next((f for f in formats if f.get("format_id") in ["best_720p_mp4", "best_804p_mp4", "best_360p_mp4", "best_358p_mp4"]), None)
+        if compact_fmt and (not comp_fmt or compact_fmt.get("format_id") != comp_fmt.get("format_id")):
+            sz_b = compact_fmt.get("estimated_size_bytes")
+            options.append({
+                "action": "download_compact_video",
+                "format_type": "video",
+                "format_id": compact_fmt.get("format_id"),
+                "resolution": compact_fmt.get("resolution") or "Standard",
+                "codec": compact_fmt.get("codec") or "H.264",
+                "estimated_size": _format_size(sz_b),
+                "label": f"📱 Balanced / Mobile Video ({compact_fmt.get('resolution')} {compact_fmt.get('codec') or ''})",
+                "description": "Fast download optimized for smaller file size and mobile devices.",
+                "status": compact_fmt.get("status", "ready"),
+                "status_reason": compact_fmt.get("status_reason"),
+                "recommended": False
+            })
+
+        mp3_fmt = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None)
+        if mp3_fmt or has_audio:
+            sz_b = mp3_fmt.get("estimated_size_bytes") if mp3_fmt else None
+            options.append({
+                "action": "extract_audio_mp3",
+                "format_type": "audio",
+                "format_id": "best_audio_mp3",
+                "resolution": "Audio Only",
+                "codec": "MP3 (320 kbps)",
+                "estimated_size": _format_size(sz_b),
+                "label": "🎵 Universal MP3 Soundtrack (320 kbps)",
+                "description": "High-bitrate standalone audio track, compatible with all music players.",
+                "status": mp3_fmt.get("status", "ready") if mp3_fmt else "ready",
+                "status_reason": mp3_fmt.get("status_reason") if mp3_fmt else None,
+                "recommended": False
+            })
+
+        m4a_fmt = next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None)
+        if m4a_fmt:
+            sz_b = m4a_fmt.get("estimated_size_bytes")
+            options.append({
+                "action": "extract_audio_aac",
+                "format_type": "audio",
+                "format_id": "best_audio_m4a",
+                "resolution": "Audio Only",
+                "codec": "AAC / M4A",
+                "estimated_size": _format_size(sz_b),
+                "label": "🎧 Studio Master AAC Audio (M4A)",
+                "description": "Direct digital audio track with pristine frequency preservation.",
+                "status": m4a_fmt.get("status", "ready"),
+                "status_reason": m4a_fmt.get("status_reason"),
+                "recommended": False
+            })
+
+        if not options:
+            for f in formats[:4]:
+                options.append({
+                    "action": "download_file",
+                    "format_type": f.get("file_type") or "document",
+                    "format_id": f.get("format_id"),
+                    "resolution": f.get("resolution") or "-",
+                    "codec": f.get("codec") or f.get("mime_type"),
+                    "estimated_size": _format_size(f.get("estimated_size_bytes")),
+                    "label": f"📦 Download {f.get('quality_label', 'Original File')} ({f.get('mime_type')})",
+                    "description": "Direct original asset download preserving native file integrity.",
+                    "status": f.get("status", "ready"),
+                    "status_reason": f.get("status_reason"),
+                    "recommended": f == formats[0]
+                })
 
     dur_str = f"{int(duration_seconds)}s ({int(duration_seconds // 60)}m {int(duration_seconds % 60)}s)" if duration_seconds else "Unknown"
 
     card_lines = [
         f"### 📥 Media Preview: {title}\n",
-        f"▶️ **[Play / Watch Stream Preview in Browser]({video_playing_url})**\n",
+        f"▶️ **[Play / Watch Stream Preview in Browser]({video_playing_url})** *(supports range requests & inline 10s preview)*\n",
     ]
     if thumbnail_url:
         card_lines.append(f"![Thumbnail]({thumbnail_url})\n")
@@ -1275,17 +1314,39 @@ async def preview_media(
     card_lines.append(f"| **Duration** | {dur_str} |")
     card_lines.append(f"| **Live Stream Player** | [▶ Open Web Player Preview]({video_playing_url}) |\n")
 
-    card_lines.append("### 📋 Available Download Formats & Options\n")
-    card_lines.append("| # | Format Option | Resolution | Codec | Est. Size | Description |")
-    card_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+    card_lines.append("### 📋 Probed Download Formats & Availability\n")
+    card_lines.append("| # | Format Option | Resolution | Codec | Est. Size | Status | Action | Description |")
+    card_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
     for idx, opt in enumerate(options, 1):
-        rec_tag = " *(Recommended)*" if opt.get("recommended") else ""
+        st = opt.get("status", "ready")
+        rec_tag = " *(Recommended)*" if opt.get("recommended") and st == "ready" else ""
+        if st == "ready":
+            st_badge = "🟢 Ready"
+            action_btn = "[⬇️ Download Ready]"
+        elif st == "unavailable":
+            st_badge = "🔴 Unavailable"
+            action_btn = "[⛔ Disabled]"
+        else:
+            st_badge = "🟡 Unknown Size"
+            action_btn = "[⚠️ Approval Needed]"
+
         card_lines.append(
-            f"| {idx} | **{opt['label']}**{rec_tag} | `{opt.get('resolution', '-')}` | `{opt.get('codec', '-')}` | `{opt.get('estimated_size', '-')}` | {opt.get('description', '')} |"
+            f"| {idx} | **{opt['label']}**{rec_tag} | `{opt.get('resolution', '-')}` | `{opt.get('codec', '-')}` | `{opt.get('estimated_size', '-')}` | {st_badge} | {action_btn} | {opt.get('description', '')} |"
         )
 
-    card_lines.append("\n*To download, tell me which option you want (e.g. 'download compatible video', 'give me 4k master', or 'extract mp3 audio').*")
+    if all_unavailable:
+        card_lines.append(f"\n⚠️ **Notice**: All formats are currently unavailable because the backend adapter is unreachable or encountering platform restrictions ({options[0].get('status_reason') if options else 'Service offline'}).")
+    else:
+        card_lines.append("\n*To download, tell me which option you want (e.g. 'download compatible video', 'give me master video', or 'extract mp3 audio').*")
+
     interactive_card = "\n".join(card_lines)
+
+    first_err = formats[0].get("status_reason") if (formats and all_unavailable) else None
+    prompt_str = (
+        f"Found '{title}', but media extraction failed: {first_err or 'Service is currently unavailable'}."
+        if all_unavailable else
+        f"Found '{title}'. Universal compatible video, native stream, and audio extraction are probed and ready. Would you like me to download the compatible video, native master, or extract MP3 audio?"
+    )
 
     return make_success_envelope({
         "source_id": source_id,
@@ -1300,7 +1361,7 @@ async def preview_media(
         "has_audio": has_audio,
         "options": options,
         "interactive_card": interactive_card,
-        "prompt_to_user": f"Found '{title}'. Would you like me to download the universal compatible video (H.264), the native master resolution, extract MP3 audio, or save the original file?"
+        "prompt_to_user": prompt_str
     })
 
 # =====================================================================

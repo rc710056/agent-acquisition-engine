@@ -88,6 +88,9 @@ class FormatOption(BaseModel):
     has_video: Optional[bool] = None
     category: Optional[str] = "recommended" # recommended, audio_only, video_only, raw
     provider_restrictions: Optional[List[str]] = []
+    status: str = "ready" # "ready", "unavailable", "unknown"
+    status_reason: Optional[str] = None
+    sample_preview_url: Optional[str] = None
 
 class SourceInspectionResponse(BaseModel):
     source_id: str
