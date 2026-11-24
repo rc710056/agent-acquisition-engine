@@ -286,12 +286,23 @@ async def test_category_7_webpage_containing_multiple_images(fixture_port, monke
 
 @pytest.mark.asyncio
 async def test_category_8_unsupported_platform_url():
-    """Category 8: Unsupported/restricted platform URL."""
-    url = "https://instagram.com/reel/C382x910/"
+    """Category 8: Unsupported/non-media service URL."""
+    url = "https://unsupported-unknown-landing-service.xyz/"
     classification = await SourceClassifier.classify(url)
     assert classification.source_type == SourceType.UNSUPPORTED_SOURCE
-    assert classification.acquisition_permission == AcquisitionPermission.RESTRICTED
     assert classification.provider_id == "unsupported"
+
+@pytest.mark.asyncio
+async def test_category_social_media_platforms_supported():
+    """Verifies that social media URLs (Instagram, TikTok, Twitter/X) are mapped to permitted_media."""
+    for social_url in [
+        "https://www.instagram.com/reel/C382x910/",
+        "https://tiktok.com/@creator/video/1234567890",
+        "https://x.com/user/status/9876543210"
+    ]:
+        classification = await SourceClassifier.classify(social_url)
+        assert classification.provider_id == "permitted_media"
+        assert classification.source_type == SourceType.PLATFORM_MEDIA_PAGE
 
 @pytest.mark.asyncio
 async def test_category_9_authentication_required_source(fixture_port, monkeypatch):

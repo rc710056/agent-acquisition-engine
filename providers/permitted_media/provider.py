@@ -102,7 +102,8 @@ class PermittedMediaProvider(BaseProviderContract):
         netloc = urlparse(url).netloc.lower()
         media_domains = [
             "youtube.com", "youtu.be", "vimeo.com", "reddit.com", "v.redd.it",
-            "soundcloud.com", "bandcamp.com", "dailymotion.com"
+            "soundcloud.com", "bandcamp.com", "dailymotion.com",
+            "instagram.com", "tiktok.com", "twitter.com", "x.com", "threads.net"
         ]
         return any(d in netloc for d in media_domains)
 

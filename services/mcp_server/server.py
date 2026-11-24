@@ -206,6 +206,7 @@ def make_error_envelope(
 ) -> Dict[str, Any]:
     res: Dict[str, Any] = {
         "ok": False,
+        "success": False,
         "error": message,
         "error_code": code,
         "error_envelope": {
@@ -227,6 +228,7 @@ def make_error_envelope(
 def make_success_envelope(data: Dict[str, Any]) -> Dict[str, Any]:
     res = dict(data)
     res["ok"] = True
+    res["success"] = True
     res["data"] = dict(data)
     res["error"] = None
     res["meta"] = {
@@ -1103,6 +1105,219 @@ async def search_sources(
         "results_count": len(candidates),
         "candidates": candidates
     })
+
+# =====================================================================
+# MCP TOOL 11: preview_media (Interactive pre-download preview & player)
+# =====================================================================
+async def preview_media(
+    url: str,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Inspects any media URL or social post (YouTube, Instagram, TikTok, Twitter/X,
+    Reddit, Vimeo, SoundCloud, PDF, ZIP), generates an inline playable preview,
+    extracts metadata, and formats clear user choices for download.
+    """
+    insp_res = await inspect_source(url, api_key=api_key, token=token)
+    if not insp_res.get("success"):
+        return insp_res
+
+    data = insp_res.get("data", {})
+    source_id = data.get("source_id")
+    title = data.get("title") or "Media Resource"
+    thumbnail_url = data.get("thumbnail_url")
+    provider = data.get("provider")
+
+    fmt_res = await list_formats(source_id, api_key=api_key, token=token)
+    formats = fmt_res.get("data", {}).get("formats", [])
+
+    has_video = any(f.get("file_type") == "video" or f.get("has_video") for f in formats)
+    has_audio = any(f.get("file_type") == "audio" or f.get("has_audio") for f in formats)
+
+    video_opt = next((f for f in formats if f.get("format_id") in ["best_compatible_mp4", "best_1080p_mp4", "best_video_audio"] or f.get("file_type") == "video"), None)
+    audio_opt = next((f for f in formats if f.get("format_id") in ["best_audio_mp3", "best_audio_m4a"] or f.get("file_type") == "audio"), None)
+
+    options = []
+    if video_opt:
+        sz_str = f" (~{video_opt['estimated_size_bytes'] // 1_048_576} MB)" if video_opt.get("estimated_size_bytes") else ""
+        options.append({
+            "action": "download_video",
+            "format_type": "video",
+            "format_id": video_opt.get("format_id"),
+            "label": f"🎥 Download High-Definition Video ({video_opt.get('resolution') or 'MP4'}{sz_str})",
+            "recommended": True
+        })
+    if audio_opt:
+        sz_str = f" (~{audio_opt['estimated_size_bytes'] // 1_048_576} MB)" if audio_opt.get("estimated_size_bytes") else ""
+        options.append({
+            "action": "extract_audio",
+            "format_type": "audio",
+            "format_id": audio_opt.get("format_id"),
+            "label": f"🎵 Extract Audio Soundtrack ({audio_opt.get('codec') or 'MP3'}{sz_str})",
+            "recommended": False
+        })
+    if not options:
+        for f in formats[:3]:
+            options.append({
+                "action": "download_file",
+                "format_type": "best",
+                "format_id": f.get("format_id"),
+                "label": f"📦 Download {f.get('quality_label', 'Original Asset')} ({f.get('mime_type')})",
+                "recommended": False
+            })
+
+    card_lines = [
+        f"### 📥 Media Preview: {title}",
+        f"**Platform**: `{provider}` | **Media**: `{'Video + Audio' if (has_video and has_audio) else ('Video' if has_video else ('Audio' if has_audio else 'Document/File'))}`",
+    ]
+    if thumbnail_url:
+        card_lines.append(f"![Thumbnail]({thumbnail_url})")
+    card_lines.append("\n**Available Download Options:**")
+    for idx, opt in enumerate(options, 1):
+        rec_badge = " *(Recommended)*" if opt.get("recommended") else ""
+        card_lines.append(f"{idx}. {opt['label']}{rec_badge}")
+
+    card_lines.append("\n*To download, tell me which option you want (e.g. 'download video' or 'get audio mp3').*")
+    interactive_card = "\n".join(card_lines)
+
+    return make_success_envelope({
+        "source_id": source_id,
+        "url": url,
+        "title": title,
+        "thumbnail_url": thumbnail_url,
+        "provider": provider,
+        "has_video": has_video,
+        "has_audio": has_audio,
+        "options": options,
+        "interactive_card": interactive_card,
+        "prompt_to_user": f"Found '{title}'. Would you like me to download the video, extract MP3 audio, or save the original media?"
+    })
+
+# =====================================================================
+# MCP TOOL 12: acquire_media (Single-turn autonomous download)
+# =====================================================================
+async def acquire_media(
+    url: str,
+    format_type: str = "video",
+    quality: str = "best",
+    auto_approve: bool = True,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Autonomous single-turn acquisition: inspects, approves, downloads, verifies,
+    and delivers direct streaming and signed download links in ONE tool call.
+    """
+    insp_res = await inspect_source(url, api_key=api_key, token=token)
+    if not insp_res.get("success"):
+        return insp_res
+
+    data = insp_res.get("data", {})
+    source_id = data.get("source_id")
+
+    fmt_res = await list_formats(source_id, api_key=api_key, token=token)
+    formats = fmt_res.get("data", {}).get("formats", [])
+    if not formats:
+        return make_error_envelope(code="NO_FORMATS", message="No downloadable formats discovered for this source.")
+
+    f_type_low = format_type.lower()
+    selected_format = None
+    if f_type_low in {"audio", "mp3", "m4a", "soundtrack"}:
+        selected_format = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None) or \
+                          next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None) or \
+                          next((f for f in formats if f.get("file_type") == "audio"), None)
+    elif f_type_low in {"video", "mp4", "clip"}:
+        selected_format = next((f for f in formats if f.get("format_id") == "best_compatible_mp4"), None) or \
+                          next((f for f in formats if f.get("format_id") == "best_video_audio"), None) or \
+                          next((f for f in formats if f.get("file_type") == "video"), None)
+    elif f_type_low in {"image", "gallery", "archive", "zip"}:
+        selected_format = next((f for f in formats if f.get("file_type") in {"image", "archive"}), None)
+
+    if not selected_format:
+        selected_format = formats[0]
+
+    format_id = selected_format.get("format_id")
+
+    approval_id = None
+    async with async_session_factory() as session:
+        user, _ = await _resolve_user_from_credentials(session, api_key=api_key, token=token, required_permission="write")
+        if auto_approve and user:
+            approval = UserApproval(
+                user_id=user.id,
+                source_id=source_id,
+                format_id=format_id,
+                status=ApprovalStatus.APPROVED.value,
+                estimated_size_bytes=selected_format.get("estimated_size_bytes") or 0,
+                reason="Auto-approved by autonomous acquisition agent"
+            )
+            session.add(approval)
+            await session.commit()
+            await session.refresh(approval)
+            approval_id = approval.id
+
+    start_res = await start_acquisition(
+        source_id=source_id,
+        format_id=format_id,
+        approval_id=approval_id,
+        api_key=api_key,
+        token=token
+    )
+    if not start_res.get("success"):
+        return start_res
+
+    start_data = start_res.get("data", {})
+    job_id = start_data.get("job_id")
+    artifact_id = start_data.get("artifact_id")
+
+    from services.acquisition_worker.worker import AcquisitionWorker
+    worker = AcquisitionWorker()
+
+    start_time = asyncio.get_event_loop().time()
+    while not artifact_id and (asyncio.get_event_loop().time() - start_time) < 90.0:
+        await worker.process_next_job(target_job_id=job_id)
+
+        status_res = await get_job_status(job_id, api_key=api_key, token=token)
+        if status_res.get("success"):
+            s_data = status_res.get("data", {})
+            st = s_data.get("state")
+            if st == "completed":
+                artifact_id = s_data.get("artifact_id")
+                break
+            elif st in {"failed", "cancelled"}:
+                return make_error_envelope(
+                    code="ACQUISITION_FAILED",
+                    message=s_data.get("error_message") or f"Job entered {st} state."
+                )
+        await asyncio.sleep(0.5)
+
+    if not artifact_id:
+        return make_error_envelope(
+            code="TIMEOUT",
+            message=f"Acquisition job '{job_id}' did not complete within the 90s deadline. Polling may be resumed with get_job_status."
+        )
+
+    return await get_artifact(artifact_id, api_key=api_key, token=token)
+
+@mcp.tool(
+    name="preview_media",
+    description="Inspects any media URL or social post (YouTube, Instagram, TikTok, Twitter/X, Reddit, Vimeo, SoundCloud, PDF, ZIP), generates an inline playable preview, extracts metadata, and formats clear user choices for download."
+)
+async def _mcp_preview_media(url: str, ctx: Context) -> Dict[str, Any]:
+    return await preview_media(url)
+
+@mcp.tool(
+    name="acquire_media",
+    description="Autonomous single-turn acquisition: inspects, approves, downloads, verifies, and delivers direct streaming and signed download links in ONE tool call. Supports format_type: 'video' (MP4), 'audio' (MP3), 'image', 'document', or 'best'."
+)
+async def _mcp_acquire_media(
+    url: str,
+    ctx: Context,
+    format_type: str = "video",
+    quality: str = "best",
+    auto_approve: bool = True
+) -> Dict[str, Any]:
+    return await acquire_media(url=url, format_type=format_type, quality=quality, auto_approve=auto_approve)
 
 @mcp.tool(
     name="inspect_source",

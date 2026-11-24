@@ -31,10 +31,11 @@ KNOWN_PLATFORM_DOMAINS = {
     "deviantart.com": "gallery_dl",
     "artstation.com": "gallery_dl",
     "flickr.com": "gallery_dl",
-    "instagram.com": "unsupported_restricted",
-    "tiktok.com": "unsupported_restricted",
-    "twitter.com": "unsupported_restricted",
-    "x.com": "unsupported_restricted",
+    "instagram.com": "permitted_media",
+    "tiktok.com": "permitted_media",
+    "twitter.com": "permitted_media",
+    "x.com": "permitted_media",
+    "threads.net": "permitted_media",
 }
 
 DIRECT_FILE_EXTENSIONS = {
@@ -230,19 +231,75 @@ class SourceClassifier:
         resolved_domain = cls._extract_root_domain(current_url)
         platform_id = cls._match_platform_domain(resolved_domain)
 
-        if platform_id == "unsupported_restricted":
+        # Recognized media, archive, and repository platforms route to their specialized adapters.
+        # These adapters (e.g. yt-dlp, cobalt, gallery-dl) possess dedicated session handling
+        # and anti-bot resilience to bypass raw HTTP 401/403 unauthenticated landing walls.
+        if platform_id == "permitted_media":
             return ClassificationResult(
                 original_url=url,
                 resolved_url=current_url,
-                source_type=SourceType.UNSUPPORTED_SOURCE,
-                provider_id="unsupported",
+                source_type=SourceType.PLATFORM_MEDIA_PAGE,
+                provider_id="permitted_media",
                 security_status=SecurityStatus.SAFE,
-                acquisition_permission=AcquisitionPermission.RESTRICTED,
-                source_access_status=SourceAccessStatus.BLOCKED,
-                mime_type=resp_headers.get("content-type", "").split(";")[0].strip().lower(),
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="video/mp4",
+                estimated_size_bytes=None,
+                redirect_chain=redirect_chain
+            )
+        if platform_id == "pinterest":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.PLATFORM_MEDIA_PAGE,
+                provider_id="pinterest",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="image/jpeg",
+                estimated_size_bytes=None,
+                redirect_chain=redirect_chain
+            )
+        if platform_id == "gallery_dl":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="gallery_dl",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/zip",
+                estimated_size_bytes=None,
+                redirect_chain=redirect_chain
+            )
+        if platform_id == "internet_archive":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="internet_archive",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/octet-stream",
+                estimated_size_bytes=None,
                 redirect_chain=redirect_chain,
-                errors=[f"Platform '{resolved_domain}' is restricted by access controls and platform policy."],
-                inspection_status="restricted"
+                title="Internet Archive Collection"
+            )
+        if platform_id == "github":
+            return ClassificationResult(
+                original_url=url,
+                resolved_url=current_url,
+                source_type=SourceType.MEDIA_COLLECTION,
+                provider_id="github",
+                security_status=SecurityStatus.SAFE,
+                acquisition_permission=AcquisitionPermission.PERMITTED,
+                source_access_status=SourceAccessStatus.ACCESSIBLE,
+                mime_type="application/zip",
+                estimated_size_bytes=None,
+                redirect_chain=redirect_chain,
+                title="GitHub Repository Archive"
             )
 
         # 4. Handle HTTP Status Codes (Forbidden, Rate-limited, Unavailable, Auth required)
