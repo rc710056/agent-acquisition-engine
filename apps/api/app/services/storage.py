@@ -147,6 +147,82 @@ class StorageService:
 
         return None
 
+    def extract_preview_metadata(self, file_path: Path, mime_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Extracts rich preview metadata (codecs, resolution, duration, bitrate, frame rate)
+        using ffprobe or container inspection for agent consumption.
+        """
+        if not file_path.exists():
+            return {}
+
+        meta: Dict[str, Any] = {}
+        import shutil, subprocess, json
+        ffprobe_bin = shutil.which("ffprobe")
+        m_type = mime_type or ""
+
+        # Probe video/audio
+        if ffprobe_bin and (m_type.startswith("video/") or m_type.startswith("audio/") or file_path.suffix.lower() in [".mp4", ".mkv", ".webm", ".avi", ".mov", ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg"]):
+            try:
+                cmd = [
+                    ffprobe_bin, "-v", "quiet", "-print_format", "json",
+                    "-show_format", "-show_streams", str(file_path)
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if res.returncode == 0:
+                    probe = json.loads(res.stdout)
+                    fmt = probe.get("format", {})
+                    streams = probe.get("streams", [])
+                    v_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+                    a_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+                    dur = float(fmt.get("duration", 0)) if fmt.get("duration") else None
+                    br = int(int(fmt.get("bit_rate", 0)) / 1000) if fmt.get("bit_rate") else None
+
+                    meta = {
+                        "duration_seconds": round(dur, 2) if dur else None,
+                        "bitrate_kbps": br,
+                        "has_video": v_stream is not None,
+                        "has_audio": a_stream is not None,
+                    }
+                    if v_stream:
+                        fps_val = v_stream.get("r_frame_rate", "0/1")
+                        fps = None
+                        if "/" in fps_val:
+                            parts = fps_val.split("/", 1)
+                            if float(parts[1]) > 0:
+                                fps = round(float(parts[0]) / float(parts[1]), 3)
+                        w = v_stream.get("width")
+                        h = v_stream.get("height")
+                        vc = v_stream.get("codec_name")
+                        color_sp = v_stream.get("color_space") or v_stream.get("color_primaries") or "bt709"
+                        is_hdr = bool(color_sp in ["bt2020", "smpte2084", "arib-std-b67"] or "hdr" in (v_stream.get("color_transfer") or "").lower())
+                        meta.update({
+                            "width": w,
+                            "height": h,
+                            "resolution": f"{w}x{h}" if w and h else None,
+                            "vcodec": vc,
+                            "fps": fps,
+                            "color_space": color_sp,
+                            "is_hdr": is_hdr,
+                        })
+                    if a_stream:
+                        meta.update({
+                            "acodec": a_stream.get("codec_name"),
+                            "audio_sample_rate": int(a_stream["sample_rate"]) if a_stream.get("sample_rate") else None,
+                            "audio_channels": a_stream.get("channels"),
+                        })
+                    if v_stream and a_stream:
+                        meta["codec"] = f"{meta.get('vcodec')}/{meta.get('acodec')}"
+                    elif v_stream:
+                        meta["codec"] = meta.get("vcodec")
+                    elif a_stream:
+                        meta["codec"] = meta.get("acodec")
+                    return meta
+            except Exception:
+                pass
+
+        return meta
+
     async def clean_expired_artifacts(self, session) -> int:
         """
         Deletes artifacts from disk and database whose retention TTL has expired.

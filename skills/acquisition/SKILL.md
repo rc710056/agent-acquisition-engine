@@ -270,8 +270,8 @@ Call `get_artifact` to obtain the verified artifact details and public download 
   "size_bytes": 12110272,
   "sha256": "792f8a221b2c4e5f...",
   "is_verified": true,
-  "download_url": "https://difficulties-roses-cement-loud.trycloudflare.com/api/v1/delivery/download?token=...",
-  "preview_url": "https://difficulties-roses-cement-loud.trycloudflare.com/api/v1/delivery/download?token=...",
+  "download_url": "https://courage-electro-direct-derek.trycloudflare.com/api/v1/delivery/download?token=...",
+  "preview_url": "https://courage-electro-direct-derek.trycloudflare.com/api/v1/delivery/download?token=...",
   "expires_at": "2026-11-21T21:45:00Z"
 }
 ```

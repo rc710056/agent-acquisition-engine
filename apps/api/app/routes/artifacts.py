@@ -68,6 +68,16 @@ async def get_artifact(
 
     req_base = _get_request_base_url(request)
     bundle = storage_service.generate_delivery_bundle(art.id, base_url=req_base)
+
+    preview_meta = art.preview_metadata
+    if not preview_meta:
+        art_file = storage_service.get_artifact_path(art.storage_path)
+        if art_file and art_file.exists():
+            preview_meta = storage_service.extract_preview_metadata(art_file, art.mime_type)
+            if preview_meta:
+                art.preview_metadata = preview_meta
+                await db.commit()
+
     return ArtifactMetadata(
         artifact_id=art.id,
         filename=art.filename,
@@ -78,7 +88,7 @@ async def get_artifact(
         download_url=bundle["download_url"],
         preview_url=bundle["preview_url"],
         contact_sheet_url=bundle["contact_sheet_url"] if art.mime_type.startswith("video/") else None,
-        preview_metadata=art.preview_metadata,
+        preview_metadata=preview_meta,
         expires_at=bundle["expires_at"]
     )
 

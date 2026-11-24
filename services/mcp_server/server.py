@@ -2,6 +2,7 @@ import asyncio
 import logging
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from mcp.server.mcpserver import MCPServer, Context
@@ -402,6 +403,8 @@ async def inspect_source(
         "approval_reason": approval_reason,
         "inspection_status": inspection.inspection_status,
         "title": inspection.title,
+        "thumbnail_url": inspection.thumbnail_url,
+        "duration_seconds": inspection.assets[0].duration_seconds if inspection.assets else None,
         "recommended_format_id": recommended_fmt.format_id if recommended_fmt else None,
         "recommended_format_label": recommended_fmt.quality_label if recommended_fmt else None,
         "assets": [a.model_dump() for a in inspection.assets],
@@ -867,6 +870,15 @@ async def get_artifact(
 
         bundle = storage_service.generate_delivery_bundle(art.id)
 
+        preview_meta = art.preview_metadata or {}
+        if not preview_meta:
+            art_file = storage_service.get_artifact_path(art.storage_path)
+            if art_file and art_file.exists():
+                preview_meta = storage_service.extract_preview_metadata(art_file, art.mime_type)
+                if preview_meta:
+                    art.preview_metadata = preview_meta
+                    await session.commit()
+
         return make_success_envelope({
             "artifact_id": art.id,
             "filename": art.filename,
@@ -876,8 +888,9 @@ async def get_artifact(
             "is_verified": art.is_verified,
             "download_url": bundle["download_url"],
             "preview_url": bundle["preview_url"],
+            "streaming_url": bundle["preview_url"],
             "contact_sheet_url": bundle["contact_sheet_url"] if art.mime_type.startswith("video/") else None,
-            "preview_metadata": art.preview_metadata,
+            "preview_metadata": preview_meta,
             "expires_at": bundle["expires_at"].isoformat()
         })
 
@@ -1127,7 +1140,19 @@ async def preview_media(
     source_id = data.get("source_id")
     title = data.get("title") or "Media Resource"
     thumbnail_url = data.get("thumbnail_url")
+    duration_seconds = data.get("duration_seconds")
     provider = data.get("provider")
+
+    # Formulate proper direct video playing / web player preview link
+    video_playing_url = url
+    if "youtube.com" in url or "youtu.be" in url:
+        m_yt = re.search(r'(?:v=|\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
+        if m_yt:
+            video_playing_url = f"https://www.youtube.com/watch?v={m_yt.group(1)}"
+    elif "vimeo.com" in url:
+        m_vim = re.search(r'vimeo\.com\/(\d+)', url)
+        if m_vim:
+            video_playing_url = f"https://vimeo.com/{m_vim.group(1)}"
 
     fmt_res = await list_formats(source_id, api_key=api_key, token=token)
     formats = fmt_res.get("data", {}).get("formats", [])
@@ -1135,50 +1160,131 @@ async def preview_media(
     has_video = any(f.get("file_type") == "video" or f.get("has_video") for f in formats)
     has_audio = any(f.get("file_type") == "audio" or f.get("has_audio") for f in formats)
 
-    video_opt = next((f for f in formats if f.get("format_id") in ["best_compatible_mp4", "best_1080p_mp4", "best_video_audio"] or f.get("file_type") == "video"), None)
-    audio_opt = next((f for f in formats if f.get("format_id") in ["best_audio_mp3", "best_audio_m4a"] or f.get("file_type") == "audio"), None)
-
     options = []
-    if video_opt:
-        sz_str = f" (~{video_opt['estimated_size_bytes'] // 1_048_576} MB)" if video_opt.get("estimated_size_bytes") else ""
+    comp_fmt = next((f for f in formats if f.get("format_id") in ["best_compatible_mp4", "best_compatible"]), None)
+    if comp_fmt or has_video:
+        target_f = comp_fmt or next((f for f in formats if f.get("file_type") == "video"), None)
+        sz_b = target_f.get("estimated_size_bytes") if target_f else None
+        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Standard Size"
+        res_str = target_f.get("resolution") or "1080p"
         options.append({
-            "action": "download_video",
+            "action": "download_compatible_video",
             "format_type": "video",
-            "format_id": video_opt.get("format_id"),
-            "label": f"🎥 Download High-Definition Video ({video_opt.get('resolution') or 'MP4'}{sz_str})",
+            "format_id": target_f.get("format_id") if target_f else "best_compatible_mp4",
+            "resolution": res_str,
+            "codec": "H.264 / AAC",
+            "estimated_size": sz_str,
+            "label": f"🎥 Universal Compatible Video ({res_str} H.264/AAC)",
+            "description": "Recommended for universal playback on QuickTime, iPhone, Safari, TVs, and web browsers with zero codec issues.",
             "recommended": True
         })
-    if audio_opt:
-        sz_str = f" (~{audio_opt['estimated_size_bytes'] // 1_048_576} MB)" if audio_opt.get("estimated_size_bytes") else ""
+
+    master_fmt = next((f for f in formats if f.get("format_id") == "best_video_audio"), None)
+    if master_fmt and (not comp_fmt or master_fmt.get("resolution") != comp_fmt.get("resolution") or master_fmt.get("codec") != comp_fmt.get("codec")):
+        sz_b = master_fmt.get("estimated_size_bytes")
+        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Original Size"
+        res_str = master_fmt.get("resolution") or "Native"
         options.append({
-            "action": "extract_audio",
-            "format_type": "audio",
-            "format_id": audio_opt.get("format_id"),
-            "label": f"🎵 Extract Audio Soundtrack ({audio_opt.get('codec') or 'MP3'}{sz_str})",
+            "action": "download_master_video",
+            "format_type": "video",
+            "format_id": master_fmt.get("format_id"),
+            "resolution": res_str,
+            "codec": master_fmt.get("codec") or "Native",
+            "estimated_size": sz_str,
+            "label": f"🌟 Native Master Video ({res_str} {master_fmt.get('codec') or ''})",
+            "description": "Highest original fidelity direct from creator master upload (may use modern AV1/VP9 codecs).",
             "recommended": False
         })
+
+    compact_fmt = next((f for f in formats if f.get("format_id") in ["best_720p_mp4", "best_804p_mp4", "best_360p_mp4", "best_358p_mp4"]), None)
+    if compact_fmt and (not comp_fmt or compact_fmt.get("format_id") != comp_fmt.get("format_id")):
+        sz_b = compact_fmt.get("estimated_size_bytes")
+        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Compact Size"
+        options.append({
+            "action": "download_compact_video",
+            "format_type": "video",
+            "format_id": compact_fmt.get("format_id"),
+            "resolution": compact_fmt.get("resolution") or "Standard",
+            "codec": compact_fmt.get("codec") or "H.264",
+            "estimated_size": sz_str,
+            "label": f"📱 Balanced / Mobile Video ({compact_fmt.get('resolution')} {compact_fmt.get('codec') or ''})",
+            "description": "Fast download optimized for smaller file size, mobile devices, and low bandwidth.",
+            "recommended": False
+        })
+
+    mp3_fmt = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None)
+    if mp3_fmt or has_audio:
+        sz_b = mp3_fmt.get("estimated_size_bytes") if mp3_fmt else None
+        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Audio"
+        options.append({
+            "action": "extract_audio_mp3",
+            "format_type": "audio",
+            "format_id": "best_audio_mp3",
+            "resolution": "Audio Only",
+            "codec": "MP3 (320 kbps)",
+            "estimated_size": sz_str,
+            "label": "🎵 Universal MP3 Soundtrack (320 kbps)",
+            "description": "High-bitrate standalone audio track, compatible with all music players and car stereos.",
+            "recommended": False
+        })
+
+    m4a_fmt = next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None)
+    if m4a_fmt:
+        sz_b = m4a_fmt.get("estimated_size_bytes")
+        sz_str = f"~{sz_b // 1_048_576} MB" if sz_b else "Audio"
+        options.append({
+            "action": "extract_audio_aac",
+            "format_type": "audio",
+            "format_id": "best_audio_m4a",
+            "resolution": "Audio Only",
+            "codec": "AAC / M4A",
+            "estimated_size": sz_str,
+            "label": "🎧 Studio Master AAC Audio (M4A)",
+            "description": "Direct digital audio track with pristine frequency preservation for editing and archival.",
+            "recommended": False
+        })
+
     if not options:
-        for f in formats[:3]:
+        for f in formats[:4]:
             options.append({
                 "action": "download_file",
-                "format_type": "best",
+                "format_type": f.get("file_type") or "document",
                 "format_id": f.get("format_id"),
-                "label": f"📦 Download {f.get('quality_label', 'Original Asset')} ({f.get('mime_type')})",
-                "recommended": False
+                "resolution": f.get("resolution") or "-",
+                "codec": f.get("codec") or f.get("mime_type"),
+                "estimated_size": f"~{f['estimated_size_bytes'] // 1_048_576} MB" if f.get("estimated_size_bytes") else "Original",
+                "label": f"📦 Download {f.get('quality_label', 'Original File')} ({f.get('mime_type')})",
+                "description": "Direct original asset download preserving native file integrity.",
+                "recommended": f == formats[0]
             })
 
+    dur_str = f"{int(duration_seconds)}s ({int(duration_seconds // 60)}m {int(duration_seconds % 60)}s)" if duration_seconds else "Unknown"
+
     card_lines = [
-        f"### 📥 Media Preview: {title}",
-        f"**Platform**: `{provider}` | **Media**: `{'Video + Audio' if (has_video and has_audio) else ('Video' if has_video else ('Audio' if has_audio else 'Document/File'))}`",
+        f"### 📥 Media Preview: {title}\n",
+        f"▶️ **[Play / Watch Stream Preview in Browser]({video_playing_url})**\n",
     ]
     if thumbnail_url:
-        card_lines.append(f"![Thumbnail]({thumbnail_url})")
-    card_lines.append("\n**Available Download Options:**")
-    for idx, opt in enumerate(options, 1):
-        rec_badge = " *(Recommended)*" if opt.get("recommended") else ""
-        card_lines.append(f"{idx}. {opt['label']}{rec_badge}")
+        card_lines.append(f"![Thumbnail]({thumbnail_url})\n")
 
-    card_lines.append("\n*To download, tell me which option you want (e.g. 'download video' or 'get audio mp3').*")
+    card_lines.append("| Attribute | Specification |")
+    card_lines.append("| :--- | :--- |")
+    card_lines.append(f"| **Media Title** | {title} |")
+    card_lines.append(f"| **Platform** | `{provider}` |")
+    card_lines.append(f"| **Media Type** | `{'Video + Audio' if (has_video and has_audio) else ('Video' if has_video else ('Audio' if has_audio else 'Document/File'))}` |")
+    card_lines.append(f"| **Duration** | {dur_str} |")
+    card_lines.append(f"| **Live Stream Player** | [▶ Open Web Player Preview]({video_playing_url}) |\n")
+
+    card_lines.append("### 📋 Available Download Formats & Options\n")
+    card_lines.append("| # | Format Option | Resolution | Codec | Est. Size | Description |")
+    card_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+    for idx, opt in enumerate(options, 1):
+        rec_tag = " *(Recommended)*" if opt.get("recommended") else ""
+        card_lines.append(
+            f"| {idx} | **{opt['label']}**{rec_tag} | `{opt.get('resolution', '-')}` | `{opt.get('codec', '-')}` | `{opt.get('estimated_size', '-')}` | {opt.get('description', '')} |"
+        )
+
+    card_lines.append("\n*To download, tell me which option you want (e.g. 'download compatible video', 'give me 4k master', or 'extract mp3 audio').*")
     interactive_card = "\n".join(card_lines)
 
     return make_success_envelope({
@@ -1186,12 +1292,15 @@ async def preview_media(
         "url": url,
         "title": title,
         "thumbnail_url": thumbnail_url,
+        "video_playing_url": video_playing_url,
+        "stream_preview_url": video_playing_url,
+        "duration_seconds": duration_seconds,
         "provider": provider,
         "has_video": has_video,
         "has_audio": has_audio,
         "options": options,
         "interactive_card": interactive_card,
-        "prompt_to_user": f"Found '{title}'. Would you like me to download the video, extract MP3 audio, or save the original media?"
+        "prompt_to_user": f"Found '{title}'. Would you like me to download the universal compatible video (H.264), the native master resolution, extract MP3 audio, or save the original file?"
     })
 
 # =====================================================================

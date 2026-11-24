@@ -338,7 +338,10 @@ class AcquisitionWorker:
                 final_filename
             )
 
-            # 5. Save Artifact and complete job
+            # 5. Extract rich media preview metadata (codecs, resolution, fps, bitrate)
+            preview_meta = storage_service.extract_preview_metadata(perm_path, verification.detected_mime)
+
+            # 6. Save Artifact and complete job
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
             async with async_session_factory() as session:
@@ -350,7 +353,8 @@ class AcquisitionWorker:
                     sha256=sha256_hash,
                     storage_path=perm_path.name,
                     is_verified=True,
-                    origin_cache_key=cache_key
+                    origin_cache_key=cache_key,
+                    preview_metadata=preview_meta
                 )
                 session.add(artifact)
                 await session.flush()
