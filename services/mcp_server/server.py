@@ -1369,6 +1369,7 @@ async def preview_media(
 # =====================================================================
 async def acquire_media(
     url: str,
+    format_id: Optional[str] = None,
     format_type: str = "video",
     quality: str = "best",
     auto_approve: bool = True,
@@ -1391,18 +1392,22 @@ async def acquire_media(
     if not formats:
         return make_error_envelope(code="NO_FORMATS", message="No downloadable formats discovered for this source.")
 
-    f_type_low = format_type.lower()
     selected_format = None
-    if f_type_low in {"audio", "mp3", "m4a", "soundtrack"}:
-        selected_format = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None) or \
-                          next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None) or \
-                          next((f for f in formats if f.get("file_type") == "audio"), None)
-    elif f_type_low in {"video", "mp4", "clip"}:
-        selected_format = next((f for f in formats if f.get("format_id") == "best_compatible_mp4"), None) or \
-                          next((f for f in formats if f.get("format_id") == "best_video_audio"), None) or \
-                          next((f for f in formats if f.get("file_type") == "video"), None)
-    elif f_type_low in {"image", "gallery", "archive", "zip"}:
-        selected_format = next((f for f in formats if f.get("file_type") in {"image", "archive"}), None)
+    if format_id:
+        selected_format = next((f for f in formats if f.get("format_id") == format_id), None)
+
+    if not selected_format:
+        f_type_low = format_type.lower()
+        if f_type_low in {"audio", "mp3", "m4a", "soundtrack"}:
+            selected_format = next((f for f in formats if f.get("format_id") == "best_audio_mp3"), None) or \
+                              next((f for f in formats if f.get("format_id") == "best_audio_m4a"), None) or \
+                              next((f for f in formats if f.get("file_type") == "audio"), None)
+        elif f_type_low in {"video", "mp4", "clip"}:
+            selected_format = next((f for f in formats if f.get("format_id") == "best_compatible_mp4"), None) or \
+                              next((f for f in formats if f.get("format_id") == "best_video_audio"), None) or \
+                              next((f for f in formats if f.get("file_type") == "video"), None)
+        elif f_type_low in {"image", "gallery", "archive", "zip"}:
+            selected_format = next((f for f in formats if f.get("file_type") in {"image", "archive"}), None)
 
     if not selected_format:
         selected_format = formats[0]
