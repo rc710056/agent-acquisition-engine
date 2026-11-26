@@ -26,7 +26,7 @@ The **Agent Acquisition Engine (AAE)** is an enterprise-grade MCP-first gateway 
 
 ### 1. Remote MCP Transport (Server-Sent Events) - Cloud Agents & Sandboxes
 For external agent platforms (such as **Base44**, Claude Desktop, remote Sandboxes, Goose):
-- **Public MCP SSE Endpoint**: `https://myself-tissue-december-train.trycloudflare.com/mcp/sse`
+- **Public MCP SSE Endpoint**: `https://dropped-classification-appreciate-returned.trycloudflare.com/mcp/sse`
 - **Authentication**: Bearer Token in `Authorization` header
 - **Platform Secret Name**: `AAE_API_KEY`
 - **Active Token**: `aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702`
@@ -36,7 +36,7 @@ MCP Client Configuration:
 {
   "mcpServers": {
     "agent-acquisition-engine": {
-      "url": "https://myself-tissue-december-train.trycloudflare.com/mcp/sse",
+      "url": "https://dropped-classification-appreciate-returned.trycloudflare.com/mcp/sse",
       "headers": {
         "Authorization": "Bearer aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702"
       }
@@ -64,9 +64,9 @@ For local desktop agents (Cursor, Claude Desktop, local shells):
 ```
 
 ### 3. Direct REST API
-- **Base URL**: `https://myself-tissue-december-train.trycloudflare.com/api/v1` (or `http://127.0.0.1:8000/api/v1` locally)
-- **Interactive OpenAPI Documentation**: `https://myself-tissue-december-train.trycloudflare.com/docs`
-- **Health Endpoint**: `https://myself-tissue-december-train.trycloudflare.com/health`
+- **Base URL**: `https://dropped-classification-appreciate-returned.trycloudflare.com/api/v1` (or `http://127.0.0.1:8000/api/v1` locally)
+- **Interactive OpenAPI Documentation**: `https://dropped-classification-appreciate-returned.trycloudflare.com/docs`
+- **Health Endpoint**: `https://dropped-classification-appreciate-returned.trycloudflare.com/health`
 
 ---
 
@@ -275,8 +275,8 @@ Call `get_artifact` to obtain the verified artifact details and public download 
   "size_bytes": 12110272,
   "sha256": "792f8a221b2c4e5f...",
   "is_verified": true,
-  "download_url": "https://myself-tissue-december-train.trycloudflare.com/api/v1/delivery/download?token=...",
-  "preview_url": "https://myself-tissue-december-train.trycloudflare.com/api/v1/delivery/download?token=...",
+  "download_url": "https://dropped-classification-appreciate-returned.trycloudflare.com/api/v1/delivery/download?token=...",
+  "preview_url": "https://dropped-classification-appreciate-returned.trycloudflare.com/api/v1/delivery/download?token=...",
   "expires_at": "2026-11-21T21:45:00Z"
 }
 ```
@@ -349,7 +349,7 @@ In your client configuration (`claude_desktop_config.json`, `.cursor/mcp.json`, 
       }
     },
     "agent-acquisition-engine": {
-      "url": "https://myself-tissue-december-train.trycloudflare.com/mcp/sse",
+      "url": "https://dropped-classification-appreciate-returned.trycloudflare.com/mcp/sse",
       "headers": {
         "Authorization": "Bearer aae_live_c6120c81ab9f6ce84a556896a2a5dcabc8b1ba81c66b4702"
       }
